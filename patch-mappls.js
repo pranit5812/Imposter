@@ -192,3 +192,40 @@ if (fs.existsSync(mapplsPkgDir)) {
     }
   }
 }
+
+// 5. Patch react-native-safe-area-context CMakeLists.txt to avoid Windows MAX_PATH path length errors in Ninja
+const safeAreaCmakePath = path.join(
+  __dirname,
+  'node_modules',
+  'react-native-safe-area-context',
+  'android',
+  'src',
+  'main',
+  'jni',
+  'CMakeLists.txt'
+);
+
+if (fs.existsSync(safeAreaCmakePath)) {
+  let content = fs.readFileSync(safeAreaCmakePath, 'utf8');
+  if (!content.includes('CMAKE_CURRENT_BINARY_DIR/codegen')) {
+    const targetChunk = 'file(GLOB LIB_CODEGEN_SRCS CONFIGURE_DEPENDS ${LIB_ANDROID_GENERATED_JNI_DIR}/*.cpp ${LIB_ANDROID_GENERATED_COMPONENTS_DIR}/*.cpp)';
+    const replacementChunk = `file(MAKE_DIRECTORY \${CMAKE_CURRENT_BINARY_DIR}/codegen)
+file(GLOB_RECURSE _GENERATED_FILES CONFIGURE_DEPENDS \${LIB_ANDROID_GENERATED_JNI_DIR}/*)
+foreach(_file \${_GENERATED_FILES})
+  if(NOT IS_DIRECTORY \${_file})
+    get_filename_component(_filename \${_file} NAME)
+    configure_file(\${_file} \${CMAKE_CURRENT_BINARY_DIR}/codegen/\${_filename} COPYONLY)
+  endif()
+endforeach()
+file(GLOB LIB_CODEGEN_SRCS \${CMAKE_CURRENT_BINARY_DIR}/codegen/*.cpp)`;
+
+    if (content.includes(targetChunk)) {
+      content = content.replace(targetChunk, replacementChunk);
+      if (!content.includes('\${CMAKE_CURRENT_BINARY_DIR}/codegen')) {
+        content = content.replace('target_include_directories(\n  ${LIB_TARGET_NAME}\n  PUBLIC\n  .', 'target_include_directories(\n  ${LIB_TARGET_NAME}\n  PUBLIC\n  .\n  ${CMAKE_CURRENT_BINARY_DIR}/codegen');
+      }
+      fs.writeFileSync(safeAreaCmakePath, content, 'utf8');
+      console.log('[patch-mappls] Successfully patched react-native-safe-area-context CMakeLists.txt for Windows path limits.');
+    }
+  }
+}
