@@ -97,16 +97,6 @@ interface DailyWorkData {
   target: number;
 }
 
-const WEEKLY_HOURS_DATA: DailyWorkData[] = [
-  { day: 'Thu 22', dateStr: 'Oct 22, 2026', hours: 12.5, status: 'present', target: 8.0 },
-  { day: 'Fri 23', dateStr: 'Oct 23, 2026', hours: 7.8, status: 'present', target: 8.0 },
-  { day: 'Sat 24', dateStr: 'Oct 24, 2026', hours: 7.2, status: 'present', target: 8.0 },
-  { day: 'Sun 25', dateStr: 'Oct 25, 2026', hours: 0.0, status: 'off', target: 8.0 },
-  { day: 'Mon 26', dateStr: 'Oct 26, 2026', hours: 7.5, status: 'present', target: 8.0 },
-  { day: 'Tue 27', dateStr: 'Oct 27, 2026', hours: 7.4, status: 'present', target: 8.0 },
-  { day: 'Wed 28', dateStr: 'Today', hours: 8.0, isToday: true, status: 'active', target: 8.0 },
-];
-
 export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const insets = useSafeAreaInsets();
   const { user, refreshProfile } = useAuthStore();
@@ -134,7 +124,40 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
 
   // Analytics tab toggle: 'daily' | 'distribution'
   const [analyticsTab, setAnalyticsTab] = useState<'daily' | 'distribution'>('daily');
-  const [selectedBar, setSelectedBar] = useState<DailyWorkData | null>(WEEKLY_HOURS_DATA[6]);
+  const [selectedBar, setSelectedBar] = useState<DailyWorkData | null>(null);
+
+  const liveHoursToday = useMemo(() => {
+    if (todayStatus === 'active') {
+      return Number((liveElapsedSeconds / 3600).toFixed(1));
+    }
+    if (todayStatus === 'completed' && todayRecord?.workingMinutes) {
+      return Number((todayRecord.workingMinutes / 60).toFixed(1));
+    }
+    return 0.0;
+  }, [todayStatus, liveElapsedSeconds, todayRecord]);
+
+  const weeklyWorkData = useMemo((): DailyWorkData[] => {
+    const now = new Date();
+    const days: DailyWorkData[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(now.getDate() - i);
+      const isToday = i === 0;
+      const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
+      const dayNum = d.getDate();
+      const monthStr = d.toLocaleDateString('en-US', { month: 'short' });
+      const hours = isToday ? liveHoursToday : 0.0;
+      days.push({
+        day: `${dayName} ${dayNum}`,
+        dateStr: isToday ? 'Today' : `${monthStr} ${dayNum}, ${d.getFullYear()}`,
+        hours,
+        isToday,
+        status: isToday ? (todayStatus === 'active' ? 'active' : liveHoursToday > 0 ? 'present' : 'off') : 'off',
+        target: 8.0,
+      });
+    }
+    return days;
+  }, [liveHoursToday, todayStatus]);
 
   // Notifications Modal State & Persistent Read State
   const [showNotifModal, setShowNotifModal] = useState(false);
@@ -255,6 +278,12 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
     Boolean(todayRecord?.checkIn && todayRecord?.checkOut)
   );
 
+  const checkOutTimeString = useMemo(() => {
+    if (!todayRecord?.checkOut?.time && !(todayRecord as any)?.checkOutTime) return '--:--';
+    const raw = todayRecord?.checkOut?.time || (todayRecord as any)?.checkOutTime;
+    return (todayRecord?.checkOut as any)?.timeIST || formatTimeIST(raw);
+  }, [todayRecord]);
+
   // Load Substation & Attendance Data strictly synchronized with DB
   const loadData = async () => {
     try {
@@ -326,35 +355,6 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
     }, 1000);
     return () => clearInterval(timer);
   }, [incrementTimer]);
-
-  // AUTO CHECKOUT RULE AT 06:00 PM IST:
-  // If technician is currently checked in and time reaches 06:00 PM (18:00 IST), trigger auto checkout!
-  const hasAutoCheckedOutRef = useRef(false);
-  useEffect(() => {
-    if (isShiftActive && shiftInfo.isAfterShiftEnd && !hasAutoCheckedOutRef.current) {
-      hasAutoCheckedOutRef.current = true;
-      handleAutoCheckOut();
-    }
-  }, [isShiftActive, shiftInfo.isAfterShiftEnd]);
-
-  const handleAutoCheckOut = async () => {
-    try {
-      const record = await attendanceService.checkOut({
-        latitude: deviceCoords.latitude,
-        longitude: deviceCoords.longitude,
-        accuracy: 10,
-        remarks: 'Auto Check-Out (06:00 PM IST Shift Concluded)',
-      });
-      setShiftCompleted(record);
-      Alert.alert(
-        'Shift Concluded',
-        'Standard shift concluded at 06:00 PM IST.\nYou have been automatically checked out.',
-        [{ text: 'OK' }]
-      );
-    } catch (e) {
-      console.warn('Auto checkout error:', e);
-    }
-  };
 
   // Manual Check In Trigger: Navigates to Field Shift Check-In screen
   const handleCheckIn = () => {
@@ -601,56 +601,15 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
       return defaultRead;
     };
 
-    // Seeded personal notifications for this employee to match professional standards
-    const personalDefaults: AdminNotification[] = [
-      {
-        id: 'emp_notif_geo_01',
-        type: 'success',
-        category: 'Geofence Verified',
-        title: 'Geofence Verified (500m)',
-        message: `You are inside the authorized 500m geofence perimeter at ${substation?.name || 'Assigned Site'}${substation?.latitude ? ` (Lat: ${substation.latitude.toFixed(4)}, Long: ${substation.longitude.toFixed(4)})` : ''}.`,
-        timestamp: '10:14 AM',
-        employeeId: user?.employeeId || '',
-        employeeName: user?.name || 'Technician',
-        isRead: isItemRead('emp_notif_geo_01', false),
-        source: 'employee',
-      },
-      {
-        id: 'emp_notif_policy_02',
-        type: 'info',
-        category: 'Shift Timing Policy',
-        title: 'Shift Hours Policy (IST)',
-        message: 'Daily check-in window opens at 09:00 AM IST. Check-in is disabled after 06:00 PM IST with auto check-out at 06:00 PM.',
-        timestamp: '09:00 AM',
-        employeeId: user?.employeeId || '',
-        employeeName: user?.name || 'Technician',
-        isRead: isItemRead('emp_notif_policy_02', false),
-        source: 'admin',
-      },
-      {
-        id: 'emp_notif_safety_03',
-        type: 'warning',
-        category: 'Safety Directive',
-        title: 'PPE Safety Compliance',
-        message: 'Mandatory Level-2 electrical insulation gloves and helmet required for substation transformer diagnostics.',
-        timestamp: 'Yesterday',
-        employeeId: user?.employeeId || '',
-        employeeName: user?.name || 'Technician',
-        isRead: isItemRead('emp_notif_safety_03', true),
-        source: 'admin',
-      },
-    ];
-
     // Filter server notifications strictly for this employee
     const serverFiltered = notifications.filter((n) => {
       if (n.employeeName) {
         const notifName = n.employeeName.toLowerCase();
-        // If notification explicitly names another employee, EXCLUDE IT
-        if (!notifName.includes(firstName)) return false;
+        if (firstName && !notifName.includes(firstName)) return false;
       }
-      if (n.employeeId) {
+      if (n.employeeId && currentEmpId) {
         const notifEmpId = n.employeeId.toLowerCase();
-        if (!notifEmpId.includes('01') && !notifEmpId.includes(currentEmpId)) return false;
+        if (!notifEmpId.includes(currentEmpId)) return false;
       }
       return true;
     }).map((sn) => ({
@@ -658,15 +617,8 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
       isRead: isItemRead(sn.id, sn.isRead),
     }));
 
-    const combined = [...personalDefaults];
-    serverFiltered.forEach((sn) => {
-      if (!combined.some((c) => c.id === sn.id)) {
-        combined.unshift(sn);
-      }
-    });
-
-    return combined;
-  }, [notifications, user, substation, readNotifIds, markedAllRead]);
+    return serverFiltered;
+  }, [notifications, user, readNotifIds, markedAllRead]);
 
   const unreadNotifCount = useMemo(() => {
     if (markedAllRead) return 0;
@@ -892,9 +844,9 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
           {/* Card 5: Monthly Attendance */}
           <View style={styles.kpiCard}>
             <Text style={styles.kpiLabel}>MONTHLY ATTENDANCE</Text>
-            <Text style={styles.kpiMainValue}>57%</Text>
+            <Text style={styles.kpiMainValue}>{Math.round(((isShiftConcluded || isShiftActive ? 1 : 0) / Math.max(1, new Date().getDate())) * 100)}%</Text>
             <View style={styles.kpiFooterRow}>
-              <Text style={styles.kpiSubText}>14 Shifts Logged</Text>
+              <Text style={styles.kpiSubText}>{(isShiftConcluded || isShiftActive ? 1 : 0)} {(isShiftConcluded || isShiftActive ? 1 : 0) === 1 ? 'Shift' : 'Shifts'} Logged</Text>
               <View style={[styles.kpiIconCircle, { backgroundColor: '#F5F3FF' }]}>
                 <TrendingUp size={14} color="#7C3AED" />
               </View>
@@ -919,7 +871,7 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
                 {isShiftActive
                   ? `Shift Active • ${todayPunctualityMeta.label}`
                   : isShiftConcluded
-                  ? `Shift Concluded • ${todayPunctualityMeta.label}`
+                  ? `Shift Concluded • Out at ${checkOutTimeString}`
                   : !shiftInfo.isCheckInAllowed
                   ? shiftInfo.isAfterShiftEnd
                     ? 'Check-In Closed • Shift Ended at 18:00'
@@ -928,7 +880,7 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
               </Text>
               <Text style={styles.bannerSubtitleText} numberOfLines={1}>
                 {isShiftConcluded
-                  ? 'Shift recorded for today • Re-check in is not allowed'
+                  ? `Checked Out at ${checkOutTimeString} • Shift recorded for today`
                   : substation?.name ? `GPS verified at your current device location • ${substation.name}` : 'Please contact admin to allocate your work site'}
               </Text>
             </View>
@@ -1038,146 +990,112 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
         </View>
 
         {/* ============================================================== */}
-        {/* 4. MY ATTENDANCE REVIEW & WORK HOURS (AS IN PHOTO GRAPH/KPI)   */}
+        {/* 4. MY ATTENDANCE REVIEW & WORK HOURS                          */}
         {/* ============================================================== */}
         <View style={styles.analyticsCard}>
-          {/* Section Header */}
-          <View style={styles.analyticsHeaderRow}>
-            <View style={styles.analyticsIconBox}>
-              <BarChart3 size={18} color="#1E63F0" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <View style={styles.analyticsTitleRow}>
-                <Text style={styles.analyticsTitle}>My Attendance Review & Work Hours</Text>
-                <View style={styles.analyticsGreenBadge}>
-                  <Text style={styles.analyticsGreenBadgeText}>EMPLOYEE ANALYTICS</Text>
-                </View>
+            {/* Section Header */}
+            <View style={styles.analyticsHeaderRow}>
+              <View style={styles.analyticsIconBox}>
+                <BarChart3 size={18} color="#1E63F0" />
               </View>
-              
-            </View>
-
-            {/* Right Toggle Buttons */}
-            <View style={styles.analyticsToggleWrap}>
-              <TouchableOpacity
-                style={[
-                  styles.analyticsToggleBtn,
-                  analyticsTab === 'daily' && styles.analyticsToggleBtnActive,
-                ]}
-                onPress={() => setAnalyticsTab('daily')}
-                activeOpacity={0.8}
-              >
-                <Text
-                  style={[
-                    styles.analyticsToggleBtnText,
-                    analyticsTab === 'daily' && styles.analyticsToggleBtnTextActive,
-                  ]}
-                >
-                  Daily Hours Trend
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.analyticsToggleBtn,
-                  analyticsTab === 'distribution' && styles.analyticsToggleBtnActive,
-                ]}
-                onPress={() => setAnalyticsTab('distribution')}
-                activeOpacity={0.8}
-              >
-                <Text
-                  style={[
-                    styles.analyticsToggleBtnText,
-                    analyticsTab === 'distribution' && styles.analyticsToggleBtnTextActive,
-                  ]}
-                >
-                  Shift Distribution
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.fullLogsBtn}
-                onPress={() => navigation.navigate('History')}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.fullLogsBtnText}>→ Full Logs</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* 4 Analytics Summary Stat Cards */}
-          <View style={styles.statsSummaryGrid}>
-            <View style={styles.statSummaryBox}>
-              <Text style={styles.statSummaryLabel}>WEEK TOTAL HOURS</Text>
-              <Text style={styles.statSummaryValue}>
-                53.0 <Text style={styles.statSummaryUnit}>hrs</Text>
-              </Text>
-              <Text style={styles.statSummarySub}>Target: 40h standard week</Text>
-            </View>
-
-            <View style={styles.statSummaryBox}>
-              <Text style={styles.statSummaryLabel}>DAILY AVERAGE</Text>
-              <Text style={styles.statSummaryValue}>
-                10.6 <Text style={styles.statSummaryUnit}>hrs/day</Text>
-              </Text>
-              <Text style={styles.statSummarySub}>Optimal field efficiency</Text>
-            </View>
-
-            <View style={styles.statSummaryBox}>
-              <Text style={styles.statSummaryLabel}>PRESENT SHIFTS</Text>
-              <Text style={styles.statSummaryValue}>
-                5 <Text style={styles.statSummaryUnit}>/ 6 Days</Text>
-              </Text>
-              <Text style={styles.statSummarySub}>Attendance: 57%</Text>
-            </View>
-
-            <View style={styles.statSummaryBox}>
-              <Text style={styles.statSummaryLabel}>GEOFENCE COMPLIANCE</Text>
-              <Text style={[styles.statSummaryValue, { color: '#059669' }]}>100%</Text>
-              <Text style={styles.statSummarySub}>100% In-Range Verified</Text>
-            </View>
-          </View>
-
-          {/* Dynamic Content: Bar Chart vs Distribution */}
-          {analyticsTab === 'daily' ? (
-            /* Bar Chart View matching Photo */
-            <View style={styles.chartContainer}>
-              {/* Chart Legend */}
-              <View style={styles.chartLegendRow}>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendDot, { backgroundColor: '#10B981' }]} />
-                  <Text style={styles.legendText}>Hours Worked per Day (Target line: 8.0 hrs)</Text>
-                </View>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendDot, { backgroundColor: '#1E63F0' }]} />
-                  <Text style={styles.legendText}>Today's Live Shift</Text>
+              <View style={{ flex: 1 }}>
+                <View style={styles.analyticsTitleRow}>
+                  <Text style={styles.analyticsTitle}>My Attendance Review & Work Hours</Text>
+                  <View style={styles.analyticsGreenBadge}>
+                    <Text style={styles.analyticsGreenBadgeText}>EMPLOYEE ANALYTICS</Text>
+                  </View>
                 </View>
               </View>
 
-              {/* Chart Canvas Area */}
-              <View style={styles.chartCanvas}>
-                {/* Dotted Target Line at 8 Hours */}
-                <View style={styles.targetDottedLine} />
-                <View style={styles.targetBadge}>
-                  <Text style={styles.targetBadgeText}>8h Target Shift</Text>
+              {/* Right Toggle Buttons */}
+              <View style={styles.analyticsToggleWrap}>
+                <TouchableOpacity
+                  style={[
+                    styles.analyticsToggleBtn,
+                    analyticsTab === 'daily' && styles.analyticsToggleBtnActive,
+                  ]}
+                  onPress={() => setAnalyticsTab('daily')}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      styles.analyticsToggleBtnText,
+                      analyticsTab === 'daily' && styles.analyticsToggleBtnTextActive,
+                    ]}
+                  >
+                    Daily Hours Trend
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.analyticsToggleBtn,
+                    analyticsTab === 'distribution' && styles.analyticsToggleBtnActive,
+                  ]}
+                  onPress={() => setAnalyticsTab('distribution')}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      styles.analyticsToggleBtnText,
+                      analyticsTab === 'distribution' && styles.analyticsToggleBtnTextActive,
+                    ]}
+                  >
+                    Shift Distribution
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.fullLogsBtn}
+                  onPress={() => navigation.navigate('History')}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.fullLogsBtnText}>→ Full Logs</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Dynamic Content: Bar Chart vs Distribution */}
+            {analyticsTab === 'daily' ? (
+              /* Bar Chart View matching Photo */
+              <View style={styles.chartContainer}>
+                {/* Chart Legend */}
+                <View style={styles.chartLegendRow}>
+                  <View style={styles.legendItem}>
+                    <View style={[styles.legendDot, { backgroundColor: '#10B981' }]} />
+                    <Text style={styles.legendText}>Hours Worked per Day (Target line: 8.0 hrs)</Text>
+                  </View>
+                  <View style={styles.legendItem}>
+                    <View style={[styles.legendDot, { backgroundColor: '#1E63F0' }]} />
+                    <Text style={styles.legendText}>Today's Live Shift</Text>
+                  </View>
                 </View>
 
-                {/* Y-Axis Reference Labels */}
-                <View style={styles.yAxisCol}>
-                  <Text style={styles.yAxisLabel}>10h</Text>
-                  <Text style={styles.yAxisLabel}>5h</Text>
-                  <Text style={styles.yAxisLabel}>2h</Text>
-                  <Text style={styles.yAxisLabel}>0h</Text>
-                </View>
+                {/* Chart Canvas Area */}
+                <View style={styles.chartCanvas}>
+                  {/* Dotted Target Line at 8 Hours */}
+                  <View style={styles.targetDottedLine} />
+                  <View style={styles.targetBadge}>
+                    <Text style={styles.targetBadgeText}>8h Target Shift</Text>
+                  </View>
 
-                {/* Bars Container */}
-                <View style={styles.barsContainer}>
-                  {WEEKLY_HOURS_DATA.map((item, index) => {
-                    const maxHeight = 135; // Max bar container px
-                    const heightPct = Math.min((item.hours / 14) * 100, 100);
-                    const isSelected = selectedBar?.day === item.day;
-                    const parts = item.day.trim().split(/\s+/);
-                    const dayName = parts[0] || '';
-                    const dayDate = parts[1] || '';
+                  {/* Y-Axis Reference Labels */}
+                  <View style={styles.yAxisCol}>
+                    <Text style={styles.yAxisLabel}>10h</Text>
+                    <Text style={styles.yAxisLabel}>5h</Text>
+                    <Text style={styles.yAxisLabel}>2h</Text>
+                    <Text style={styles.yAxisLabel}>0h</Text>
+                  </View>
+
+                  {/* Bars Container */}
+                  <View style={styles.barsContainer}>
+                    {weeklyWorkData.map((item, index) => {
+                      const maxHeight = 135; // Max bar container px
+                      const heightPct = Math.min((item.hours / 14) * 100, 100);
+                      const isSelected = selectedBar?.day === item.day;
+                      const parts = item.day.trim().split(/\s+/);
+                      const dayName = parts[0] || '';
+                      const dayDate = parts[1] || '';
 
                     return (
                       <TouchableOpacity

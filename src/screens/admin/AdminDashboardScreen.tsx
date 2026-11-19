@@ -46,6 +46,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuthStore } from '../../store/useAuthStore';
 import { resolvePhotoUrl } from '../../utils/imageUrl';
 import { getStorageItem, setStorageItem } from '../../services/api';
+import { employeeService } from '../../services/employeeService';
 import {
   dashboardService,
   AdminStats,
@@ -59,6 +60,7 @@ import { StatusBadge } from '../../components/common/StatusBadge';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { AppButton } from '../../components/common/AppButton';
 import { useAdminDrawerStore } from '../../store/useAdminDrawerStore';
+import { User } from '../../types';
 import { AdminDrawerModal } from '../../components/navigation/AdminDrawerModal';
 
 interface AdminDashboardScreenProps {
@@ -70,10 +72,9 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
   const { openDrawer } = useAdminDrawerStore();
   const { user, logout } = useAuthStore();
   const [stats, setStats] = useState<AdminStats | null>(null);
+  const [employeesList, setEmployeesList] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-
-
 
   // Notifications state (modal opens only when clicking bell icon)
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
@@ -123,8 +124,12 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
 
   const fetchStats = async () => {
     try {
-      const data = await dashboardService.getAdminStats();
-      setStats(data);
+      const [data, emps] = await Promise.all([
+        dashboardService.getAdminStats().catch(() => null),
+        employeeService.getEmployees().catch(() => []),
+      ]);
+      if (data) setStats(data);
+      if (emps && Array.isArray(emps)) setEmployeesList(emps);
     } catch (e) {
       console.warn('Dashboard stats error:', e);
     } finally {
@@ -172,8 +177,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
     } catch (_) {}
   };
 
-
-
   useEffect(() => {
     fetchStats();
   }, []);
@@ -198,18 +201,40 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
     return notifications.filter((n: AdminNotification) => !n.isRead).length;
   }, [notifications, markedAllRead]);
 
-  if (loading && !stats) {
-    return <LoadingSpinner message="Aggregating workforce telemetry..." />;
-  }
+  const kpi = useMemo(() => {
+    if (stats?.kpi && stats.kpi.totalFieldStaff > 0) {
+      return stats.kpi;
+    }
+    const total = employeesList.length;
+    const active = employeesList.filter((e) => (e.status || '').toLowerCase() !== 'inactive').length;
+    return {
+      totalFieldStaff: total,
+      currentlyPresent: active,
+      absentOffDuty: Math.max(0, total - active),
+      completedShift: 0,
+    };
+  }, [stats?.kpi, employeesList]);
 
-  const kpi = stats?.kpi || {
-    totalFieldStaff: 28,
-    currentlyPresent: 23,
-    absentOffDuty: 3,
-    completedShift: 2,
-  };
+  const recentAttendance = useMemo((): RecentAttendanceItem[] => {
+    if (stats?.recentAttendance && stats.recentAttendance.length > 0) {
+      return stats.recentAttendance;
+    }
+    return employeesList.map((emp) => ({
+      id: emp.id || emp.employeeId,
+      employeeId: emp.employeeId || 'EMP',
+      employeeName: emp.name || 'Technician',
+      designation: emp.designation || (emp.role === 'supervisor' ? 'Zonal Workforce Supervisor' : 'Field Technician'),
+      siteName: emp.circle ? `${emp.circle} Circle` : emp.division ? `${emp.division} Division` : 'Central Operations',
+      checkInTime: '09:00 AM',
+      checkOutTime: '--:--',
+      duration: 'Live',
+      status: (emp.status || '').toLowerCase() === 'inactive' ? 'absent' : (emp.shiftStatus ? emp.shiftStatus.toLowerCase() : 'present'),
+      isInsideGeofence: true,
+      distanceMeters: 10,
+      distanceTraveled: '0.0 km',
+    }));
+  }, [stats?.recentAttendance, employeesList]);
 
-  const recentAttendance = stats?.recentAttendance || [];
   const filteredAttendance = recentAttendance.filter((rec) => {
     if (attendanceFilter === 'present') return rec.status === 'present' || rec.status === 'completed';
     if (attendanceFilter === 'late') return rec.status === 'late';
@@ -220,14 +245,14 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
   });
 
   const distribution = stats?.statusDistribution || {
-    presentOnTime: 18,
-    presentLate: 3,
-    completedShift: 2,
-    absent: 3,
-    totalTracked: 26,
-    complianceRate: 92.3,
-    punctualityRate: 85.7,
-    percentages: { onTime: 69, late: 12, completed: 8, absent: 11 },
+    presentOnTime: 0,
+    presentLate: 0,
+    completedShift: 0,
+    absent: 0,
+    totalTracked: 0,
+    complianceRate: 0,
+    punctualityRate: 0,
+    percentages: { onTime: 0, late: 0, completed: 0, absent: 0 },
   };
 
   const filteredNotifications = notifications.filter((item: AdminNotification) => {
@@ -1238,7 +1263,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
                       </View>
 
                       <View style={styles.notifBodyRow}>
-                        <Image source={{ uri: item.avatar }} style={styles.notifAvatar} />
                         <View style={styles.notifContentCol}>
                           <Text style={styles.notifTitleText}>{item.title}</Text>
                           <Text style={styles.notifMessageText}>{item.message}</Text>

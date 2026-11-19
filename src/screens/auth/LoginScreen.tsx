@@ -32,8 +32,8 @@ interface LoginScreenProps {
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
   const insets = useSafeAreaInsets();
-  const [username, setUsername] = useState('ADMIN001');
-  const [password, setPassword] = useState('password');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(true);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -57,22 +57,18 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
     }
 
     try {
-      await login(username.trim(), password);
-      // Immediately take required permissions (Location & Camera) right after login
+      await login(username.trim(), password, rememberMe);
       try {
         await requestRequiredAppPermissions(true);
       } catch (permErr) {
         console.warn('Post-login permissions notice:', permErr);
       }
     } catch (err: any) {
-      const msg = err.message || 'Authentication failed.';
-      if (
-        msg.toLowerCase().includes('network') ||
-        msg.toLowerCase().includes('connection') ||
-        msg.toLowerCase().includes('timeout')
-      ) {
+      const { getFriendlyErrorMessage } = require('../../services/api');
+      const msg = getFriendlyErrorMessage(err);
+      if (msg.includes('Unable to connect to the server')) {
         setFormError(
-          `Network Error: Cannot connect to backend at ${apiClient.defaults.baseURL}. If using a physical phone, ensure the server is running on your Wi-Fi LAN IP.`
+          `Network Error: Cannot connect to backend at ${apiClient.defaults.baseURL}. Ensure the server is running and accessible.`
         );
       } else {
         setFormError(msg);
@@ -105,27 +101,23 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
     }
   };
 
-  const fillDemo = (demoUser: string) => {
-    setUsername(demoUser);
-    setPassword('password');
-    setFormError(null);
-  };
-
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.keyboardContainer}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
     >
       <ScrollView
         contentContainerStyle={[
           styles.scrollContainer,
           {
             paddingTop: Math.max(insets.top, 16),
-            paddingBottom: Math.max(insets.bottom, 20) + 32,
+            paddingBottom: Math.max(insets.bottom, 20) + 160,
           },
         ]}
         keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
+        scrollEnabled={true}
+        showsVerticalScrollIndicator={true}
       >
         {/* Top Branded Logo Header */}
         <View style={styles.topLogoHeader}>
@@ -231,65 +223,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
           />
         </View>
 
-        {/* Development Quick Role Switcher */}
-        <View style={styles.demoSection}>
-          <Text style={styles.demoTitle}>DEVELOPMENT DEMO CREDENTIALS</Text>
-          <View style={styles.demoButtonRow}>
-            <TouchableOpacity delayPressIn={0}
-              style={[
-                styles.demoPill,
-                username === 'b4S/Adani/01' && styles.demoPillActive,
-              ]}
-              onPress={() => fillDemo('b4S/Adani/01')}
-              activeOpacity={0.75}
-            >
-              <Text
-                style={[
-                  styles.demoPillText,
-                  username === 'b4S/Adani/01' && styles.demoPillTextActive,
-                ]}
-              >
-                Technician
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity delayPressIn={0}
-              style={[
-                styles.demoPill,
-                (username === 'SUPER001' || username === 'SUPER01' || username === 'supervisor' || username === 'b4S/Adani/04' || username === 'b4S/Adani/05') && styles.demoPillActive,
-              ]}
-              onPress={() => fillDemo('SUPER001')}
-              activeOpacity={0.75}
-            >
-              <Text
-                style={[
-                  styles.demoPillText,
-                  (username === 'SUPER01' || username === 'supervisor' || username === 'b4S/Adani/04' || username === 'b4S/Adani/05') && styles.demoPillTextActive,
-                ]}
-              >
-                Supervisor
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity delayPressIn={0}
-              style={[
-                styles.demoPill,
-                (username === 'admin' || username === 'ADMIN001' || username === 'b4S/Adani/Admin') && styles.demoPillActive,
-              ]}
-              onPress={() => fillDemo('ADMIN001')}
-              activeOpacity={0.75}
-            >
-              <Text
-                style={[
-                  styles.demoPillText,
-                  (username === 'admin' || username === 'ADMIN001' || username === 'b4S/Adani/Admin') && styles.demoPillTextActive,
-                ]}
-              >
-                Operations Admin
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
 
         {/* Security & Copyright Footer */}
         <View style={styles.footerWrap}>

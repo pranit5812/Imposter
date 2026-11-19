@@ -3,6 +3,8 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Building2, MapPin, Radio, Pencil, Trash2 } from 'lucide-react-native';
 import { User, Substation } from '../../types';
 
+import { sanitizePhoneNumber } from '../../utils/phoneUtils';
+
 interface EmployeeCardProps {
   employee: User;
   sitesMap?: Record<string, Substation>;
@@ -75,9 +77,9 @@ export const EmployeeCard: React.FC<EmployeeCardProps> = ({
           {employee.name}
         </Text>
 
-        {/* Employee ID & Designation */}
+        {/* Employee ID, Phone & Designation */}
         <Text style={styles.subText} numberOfLines={1}>
-          {employee.employeeId} | {employee.designation || 'Junior Engineer'}
+          {employee.employeeId}{employee.phone ? ` • ${sanitizePhoneNumber(employee.phone)}` : ''} | {employee.designation || 'Junior Engineer'}
         </Text>
 
         {/* Tags Row */}

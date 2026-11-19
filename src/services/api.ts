@@ -6,6 +6,40 @@ import { CONFIG } from '../config';
 // In-memory token cache for lightning-fast synchronous request dispatching
 let cachedAuthToken: string | null = null;
 
+export function getFriendlyErrorMessage(error: any): string {
+  if (!error) return 'An unexpected error occurred. Please try again.';
+
+  if (error.response?.data?.detail) {
+    return error.response.data.detail;
+  }
+  if (error.response?.data?.message) {
+    return error.response.data.message;
+  }
+
+  const msg = error.message || '';
+  if (msg.toLowerCase().includes('network') || msg.toLowerCase().includes('timeout') || error.code === 'ERR_NETWORK') {
+    return 'Unable to connect to the server. Please check your internet connection and try again.';
+  }
+
+  if (error.response?.status === 401) {
+    return 'Your session has expired. Please log in again.';
+  }
+
+  if (error.response?.status === 403) {
+    return 'You do not have permission to perform this action.';
+  }
+
+  if (error.response?.status === 404) {
+    return 'The requested resource was not found.';
+  }
+
+  if (error.response?.status >= 500) {
+    return 'The server encountered an error. Please try again later.';
+  }
+
+  return msg || 'An unexpected error occurred. Please try again.';
+}
+
 export const apiClient = axios.create({
   baseURL: CONFIG.API_BASE_URL,
   timeout: 25000,

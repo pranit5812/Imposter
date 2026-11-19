@@ -579,6 +579,15 @@ export const SitesScreen: React.FC = () => {
     }
 
     const safeCode = (code.trim() || `ADN-SITE-${Math.floor(100 + Math.random() * 900)}`).toUpperCase();
+    const cleanCode = safeCode.toLowerCase();
+    const isDuplicateCode = sites.some(
+      (s) => s.code?.toLowerCase() === cleanCode && s.id !== editingSite?.id && (s as any)._id !== editingSite?.id
+    );
+
+    if (isDuplicateCode) {
+      Alert.alert('Duplicate Site Code', `A site with code "${safeCode}" already exists. Please enter a unique site code.`);
+      return;
+    }
 
     const rad = parseFloat(radiusMeters);
     if (isNaN(rad) || rad < 50 || rad > 5000) {
@@ -835,7 +844,7 @@ export const SitesScreen: React.FC = () => {
               </TouchableOpacity>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false} style={styles.modalScroll} keyboardShouldPersistTaps="handled">
+            <ScrollView showsVerticalScrollIndicator={true} style={styles.modalScroll} contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
               {/* Row 1: Site Name & Site Code */}
               <View style={styles.formRow}>
                 <View style={styles.colHalf}>
@@ -1127,7 +1136,7 @@ export const SitesScreen: React.FC = () => {
                 </View>
               </View>
 
-              {/* Row 4: Attendance Radius & Working Hours */}
+              {/* Row 4: Attendance Radius & Status */}
               <View style={styles.formRow}>
                 <View style={styles.colHalf}>
                   <Text style={styles.fieldLabel}>Attendance Radius (meters)</Text>
@@ -1141,20 +1150,6 @@ export const SitesScreen: React.FC = () => {
                   />
                 </View>
 
-                <View style={styles.colHalf}>
-                  <Text style={styles.fieldLabel}>Working Hours</Text>
-                  <TextInput
-                    style={styles.inputBox}
-                    placeholder="e.g. 09:00 AM - 06:00 PM"
-                    placeholderTextColor="#94A3B8"
-                    value={workingHours}
-                    onChangeText={setWorkingHours}
-                  />
-                </View>
-              </View>
-
-              {/* Row 5: Status */}
-              <View style={styles.formRow}>
                 <View style={styles.colHalf}>
                   <Text style={styles.fieldLabel}>Status</Text>
                   <TouchableOpacity delayPressIn={0}

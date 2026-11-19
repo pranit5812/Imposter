@@ -182,11 +182,11 @@ export const SupervisorSiteManagementScreen: React.FC = () => {
   // Open "Change Sites" modal
   const handleOpenChangeSites = (emp: User) => {
     setSelectedEmployee(emp);
-    const primary = emp.assignedSiteId || (emp.assignedSiteIds && emp.assignedSiteIds[0]) || 'site_pune_01';
+    const primary = emp.assignedSiteId || (emp.assignedSiteIds && emp.assignedSiteIds[0]) || '';
     const permitted = emp.assignedSiteIds && emp.assignedSiteIds.length > 0
       ? [...emp.assignedSiteIds]
-      : [primary];
-    const finalPermitted = permitted.includes(primary) ? permitted : [primary, ...permitted];
+      : (primary ? [primary] : []);
+    const finalPermitted = primary ? (permitted.includes(primary) ? permitted : [primary, ...permitted]) : permitted;
     setSelectedPrimarySiteId(primary);
     setSelectedPermittedSiteIds(finalPermitted);
     setShowPrimaryDropdown(false);

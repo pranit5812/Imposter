@@ -216,22 +216,24 @@ export const AttendanceLogsScreen: React.FC = () => {
         techFilter === 'all' ? undefined : techFilter,
         force
       );
-      if (data && data.logs && data.logs.length > 0) {
+      if (data && Array.isArray(data.logs)) {
         setLogs(data.logs);
-      } else if (!logs || logs.length === 0) {
-        setLogs(FALLBACK_LOGS);
+      } else {
+        setLogs([]);
       }
     } catch (err) {
       console.warn('Fetch logs error:', err);
-      if (!logs || logs.length === 0) {
-        setLogs(FALLBACK_LOGS);
-      }
+      setLogs([]);
     }
   };
 
   useEffect(() => {
     fetchInitialData();
   }, []);
+
+  useEffect(() => {
+    fetchLogs(selectedTechFilter, currentMonth, currentYear, period, false);
+  }, [currentMonth, currentYear, period, selectedTechFilter]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -385,9 +387,7 @@ export const AttendanceLogsScreen: React.FC = () => {
       const dayLogs = result.filter(
         (l) => l.date === targetPrefix || l.date.endsWith(`-${dayStr}`)
       );
-      if (dayLogs.length > 0) return dayLogs;
-      // Fallback: If no logs exist for this specific day, display all available shift logs for this month
-      return result;
+      return dayLogs;
     }
 
     if (period === 'Weekly') {
