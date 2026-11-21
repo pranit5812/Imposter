@@ -41,3 +41,20 @@ export const resolvePhotoUrl = (url?: string | null): string | undefined => {
   const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
   return `${cleanBase}${cleanPath}`;
 };
+
+/**
+ * Checks if a check-in selfie from an attendance record has expired (past 12:00 PM midnight / end of day)
+ */
+export const isPhotoExpired = (checkInDate?: string | Date | null): boolean => {
+  if (!checkInDate) return false;
+  try {
+    const recordDate = new Date(checkInDate);
+    if (isNaN(recordDate.getTime())) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    recordDate.setHours(0, 0, 0, 0);
+    return recordDate.getTime() < today.getTime();
+  } catch {
+    return false;
+  }
+};

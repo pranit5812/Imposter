@@ -225,10 +225,10 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
       employeeName: emp.name || 'Technician',
       designation: emp.designation || (emp.role === 'supervisor' ? 'Zonal Workforce Supervisor' : 'Field Technician'),
       siteName: emp.circle ? `${emp.circle} Circle` : emp.division ? `${emp.division} Division` : 'Central Operations',
-      checkInTime: '09:00 AM',
+      checkInTime: '--:--',
       checkOutTime: '--:--',
-      duration: 'Live',
-      status: (emp.status || '').toLowerCase() === 'inactive' ? 'absent' : (emp.shiftStatus ? emp.shiftStatus.toLowerCase() : 'present'),
+      duration: '--',
+      status: (emp.status || '').toLowerCase() === 'inactive' ? 'absent' : (emp.shiftStatus && emp.shiftStatus.toLowerCase() !== 'present' ? emp.shiftStatus.toLowerCase() : 'absent'),
       isInsideGeofence: true,
       distanceMeters: 10,
       distanceTraveled: '0.0 km',
@@ -260,6 +260,55 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
     if (notifFilter === 'geofence') return item.type === 'danger' || item.category.toLowerCase().includes('geofence');
     return true;
   });
+
+  // Dynamic LIVE Weekly Attendance & Punctuality Analytics
+  const computedWeeklyTrend = useMemo(() => {
+    const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const now = new Date();
+    const list = [];
+    const totalEmployees = Math.max(1, employeesList.length);
+
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(now.getDate() - i);
+      const dayLabel = dayNames[(d.getDay() + 6) % 7];
+
+      if (i === 0) {
+        let onTimeCount = 0;
+        let lateCount = 0;
+
+        recentAttendance.forEach((rec) => {
+          const st = (rec.status || '').toLowerCase();
+          if (st === 'present' || st === 'completed' || st === 'on-time' || st === 'on_time') {
+            onTimeCount++;
+          } else if (st === 'late' || st === 'half_day' || st === 'half-day') {
+            lateCount++;
+          }
+        });
+
+        const calculatedAbsent = Math.max(0, totalEmployees - (onTimeCount + lateCount));
+        const totalPresent = onTimeCount + lateCount;
+        const rate = Math.round((totalPresent / totalEmployees) * 100);
+
+        list.push({
+          day: dayLabel,
+          present: totalPresent,
+          late: lateCount,
+          absent: calculatedAbsent,
+          attendanceRate: rate,
+        });
+      } else {
+        list.push({
+          day: dayLabel,
+          present: 0,
+          late: 0,
+          absent: totalEmployees,
+          attendanceRate: 0,
+        });
+      }
+    }
+    return list;
+  }, [recentAttendance, employeesList]);
 
   // Status Distribution Pie metrics: Present, Pending, Checked Out
   const presentCount = kpi.currentlyPresent || 0;
@@ -548,7 +597,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
 
           {/* Interactive Stacked Multi-Metric Bar Chart */}
           <View style={styles.barChartContainer}>
-            {(stats?.weeklyTrend || []).map((item, idx) => {
+            {computedWeeklyTrend.map((item, idx) => {
               const onTime = item.present - item.late;
               const late = item.late;
               const absent = item.absent;
@@ -621,34 +670,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
               <View style={[styles.legendBox, { backgroundColor: '#FCA5A5' }]} />
               <Text style={styles.legendText}>Absent</Text>
             </View>
-          </View>
-
-          {/* Hourly Punctuality Arrival Curve Breakdown */}
-          <View style={styles.hourlyDivider} />
-          <Text style={styles.hourlySectionTitle}>TODAY'S HOURLY ARRIVAL TIMELINE</Text>
-          <View style={styles.hourlyGrid}>
-            {(stats?.hourlyArrivals || []).map((slot, i) => (
-              <View key={i} style={styles.hourlySlotCard}>
-                <View style={styles.hourlySlotHeader}>
-                  <Text style={styles.hourlySlotTime}>{slot.slot}</Text>
-                  <View style={[styles.hourlyBadge, { backgroundColor: slot.color + '20' }]}>
-                    <Text style={[styles.hourlyBadgeText, { color: slot.color }]}>{slot.label}</Text>
-                  </View>
-                </View>
-                <View style={styles.hourlySlotCountRow}>
-                  <Text style={styles.hourlyCountText}>{slot.count} staff</Text>
-                  <Text style={styles.hourlyRateText}>{slot.rate}</Text>
-                </View>
-                <View style={styles.hourlyProgressTrack}>
-                  <View
-                    style={[
-                      styles.hourlyProgressFill,
-                      { width: slot.rate, backgroundColor: slot.color },
-                    ]}
-                  />
-                </View>
-              </View>
-            ))}
           </View>
         </AppCard>
 

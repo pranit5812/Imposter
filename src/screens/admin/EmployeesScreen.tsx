@@ -938,13 +938,12 @@ export const EmployeesScreen: React.FC = () => {
                 </View>
               )}
 
-              {/* SECTION: Assigned Substations & Sites (Only shown when editing an existing employee) */}
-              {editingEmp && (
-                <View style={{ marginTop: 10 }}>
-                  <View style={styles.sectionHeaderRow}>
-                    <Text style={styles.sectionHeading}>
-                      Assigned Substations & Sites
-                    </Text>
+              {/* SECTION: Assigned Substations & Sites */}
+              <View style={{ marginTop: 10 }}>
+                <View style={styles.sectionHeaderRow}>
+                  <Text style={styles.sectionHeading}>
+                    Assigned Substations & Sites
+                  </Text>
                     <Text style={styles.sectionSubHeading}>
                       Select one or more substations assigned to this employee
                     </Text>
@@ -1000,7 +999,6 @@ export const EmployeesScreen: React.FC = () => {
                     })}
                   </View>
                 </View>
-              )}
             </ScrollView>
 
             {/* Modal Bottom Actions: Cancel & Save Changes */}

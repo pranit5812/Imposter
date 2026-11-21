@@ -49,7 +49,7 @@ let cachedEmployeesList: User[] = [];
 
 export const employeeService = {
   getCachedEmployees(): User[] {
-    return cachedEmployeesList;
+    return cachedEmployeesList;co
   },
 
   async getEmployees(filters?: EmployeeFilters): Promise<User[]> {

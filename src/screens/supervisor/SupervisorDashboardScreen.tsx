@@ -367,8 +367,8 @@ export const SupervisorDashboardScreen: React.FC = () => {
   };
 
   // Helper variables for display
-  const isShiftActive = todayData?.status === 'active';
-  const isShiftCompleted = todayData?.status === 'completed';
+  const isShiftActive = todayData?.status === 'active' || Boolean(todayData?.record?.checkIn && !todayData?.record?.checkOut);
+  const isShiftCompleted = todayData?.status === 'completed' || Boolean(todayData?.record?.checkIn && todayData?.record?.checkOut);
   const hasShiftStarted = isShiftActive || isShiftCompleted;
 
   const checkInRecord = todayData?.record?.checkIn;
@@ -694,9 +694,7 @@ export const SupervisorDashboardScreen: React.FC = () => {
                   : isShiftCompleted
                   ? `Shift Concluded • Out at ${checkOutTimeString}`
                   : !shiftInfo.isCheckInAllowed
-                  ? (shiftInfo.isAfterShiftEnd
-                      ? 'Shift Closed • Reopens 9:00 AM'
-                      : 'Check-In Closed • Opens 9:00 AM')
+                  ? 'Check-In Closed • Opens 9:00 AM'
                   : 'Ready to Check In'}
               </Text>
               <Text style={styles.bannerSubtitleText} numberOfLines={2}>
@@ -744,9 +742,7 @@ export const SupervisorDashboardScreen: React.FC = () => {
                 onPress={() =>
                   Alert.alert(
                     'Check-In Closed',
-                    shiftInfo.isAfterShiftEnd
-                      ? 'Shift check-in closed at 06:00 PM IST.\n\nCheck-in is disabled and will reappear at 09:00 AM tomorrow.'
-                      : 'Shift check-in is closed (06:00 PM – 09:00 AM IST).\n\nCheck-in will reappear and become active at 09:00 AM today.',
+                    'Shift check-in is closed (06:00 PM – 09:00 AM IST).\n\nCheck-in will reappear and become active at 09:00 AM today.',
                     [{ text: 'OK' }]
                   )
                 }
@@ -754,7 +750,7 @@ export const SupervisorDashboardScreen: React.FC = () => {
               >
                 <Lock size={15} color="#64748B" style={{ marginRight: 6 }} />
                 <Text style={[styles.normalCheckInBtnText, { color: '#64748B', fontWeight: '700' }]}>
-                  {shiftInfo.isAfterShiftEnd ? 'Normal Check In (Closed)' : 'Normal Check In (Opens 9 AM)'}
+                  Normal Check In (Opens 9 AM)
                 </Text>
               </TouchableOpacity>
             ) : (

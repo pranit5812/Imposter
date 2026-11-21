@@ -88,9 +88,8 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
   }, [todayRecord, user]);
 
   const isAlreadyCheckedIn = useMemo(() => {
-    if (!isRecordForCurrentUser) return false;
     return todayStatus === 'active' || todayStatus === 'completed' || Boolean(todayRecord?.checkIn);
-  }, [isRecordForCurrentUser, todayStatus, todayRecord]);
+  }, [todayStatus, todayRecord]);
 
   // Substation List
   const [sites, setSites] = useState<Substation[]>([]);
@@ -676,13 +675,18 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
         console.warn('Photo upload fallback to captured URI:', err);
       }
 
-      await attendanceService.checkIn({
+      const record = await attendanceService.checkIn({
         siteId: selectedSite?.id || '',
         latitude,
         longitude,
         accuracy,
         photoUrl: uploadedUrl,
         remarks: `Field Technician Shift Check-In (${distanceFormatted} from ${selectedSite?.name || 'Assigned Site'})`,
+      });
+
+      useAttendanceStore.setState({
+        todayStatus: 'active',
+        todayRecord: record,
       });
 
       await fetchTodayAttendance();

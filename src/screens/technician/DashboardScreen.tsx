@@ -272,11 +272,8 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
     );
   }, [todayRecord, user]);
 
-  const isShiftActive = isRecordForCurrentUser && todayStatus === 'active';
-  const isShiftConcluded = isRecordForCurrentUser && (
-    todayStatus === 'completed' ||
-    Boolean(todayRecord?.checkIn && todayRecord?.checkOut)
-  );
+  const isShiftActive = todayStatus === 'active' || Boolean(todayRecord?.checkIn && !todayRecord?.checkOut);
+  const isShiftConcluded = todayStatus === 'completed' || Boolean(todayRecord?.checkIn && todayRecord?.checkOut);
 
   const checkOutTimeString = useMemo(() => {
     if (!todayRecord?.checkOut?.time && !(todayRecord as any)?.checkOutTime) return '--:--';
@@ -356,34 +353,20 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
     return () => clearInterval(timer);
   }, [incrementTimer]);
 
-  // Manual Check In Trigger: Navigates to Field Shift Check-In screen
+  // Manual Check In Trigger: Opens mandatory selfie camera modal
   const handleCheckIn = () => {
     // 1. Prevent re-checkin if already checked in today
     if (isShiftActive) {
       Alert.alert('Already Checked In', 'You are already checked in. Your shift is currently in progress.');
       return;
     }
-    if (isShiftConcluded || (isRecordForCurrentUser && Boolean(todayRecord?.checkIn))) {
+    if (isShiftConcluded || Boolean(todayRecord?.checkIn)) {
       Alert.alert('Already Checked In', 'You have already checked in for today. Re-check in is not allowed.');
       return;
     }
 
-    const currentShift = getShiftInfo();
-
-    // Enforce 09:00 AM - 06:00 PM rule
-    if (!currentShift.isCheckInAllowed) {
-      Alert.alert(
-        'Check-In Closed',
-        currentShift.isAfterShiftEnd
-          ? 'Shift check-in closed at 06:00 PM IST.\n\nCheck-in is disabled for the night and reopens tomorrow at 09:00 AM IST.'
-          : 'Shift check-in is closed (06:00 PM – 09:00 AM IST).\n\nCheck-in will reopen today at 09:00 AM IST.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-
-    // Navigate to dedicated Field Shift Check-In screen with Live Location Radar & Geofence
-    navigation.navigate('CheckIn');
+    setCapturedPhotoUri(null);
+    setShowCameraModal(true);
   };
 
   // Click Photo from Live Camera
@@ -427,16 +410,6 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
 
     try {
       const currentShift = getShiftInfo();
-      if (!currentShift.isCheckInAllowed || currentShift.isAfterShiftEnd) {
-        Alert.alert(
-          'Check-In Closed',
-          'Shift check-in closed at 06:00 PM IST. Check-in is not permitted after 06:00 PM.',
-          [{ text: 'OK' }]
-        );
-        setShowCameraModal(false);
-        setIsSubmittingPhoto(false);
-        return;
-      }
       const siteId = user?.assignedSiteId || substation?.id || '';
 
       // 1. Upload live captured photo to server
@@ -456,6 +429,11 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
         accuracy: 10,
         photoUrl: uploadedPhotoUrl,
         remarks: `Field Technician Check-In (Photo Verified - ${currentShift.punctualityLabel})`,
+      });
+
+      useAttendanceStore.setState({
+        todayStatus: 'active',
+        todayRecord: record,
       });
 
       await fetchTodayAttendance();
@@ -493,13 +471,18 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
         accuracy: 10,
         remarks: 'Field Technician Check-Out',
       });
+      useAttendanceStore.setState({
+        todayStatus: 'completed',
+        todayRecord: record,
+      });
       setShiftCompleted(record);
       setShowCheckOutConfirm(false);
       triggerHaptic('success');
+      await fetchTodayAttendance();
       Alert.alert(
         'Shift Concluded',
         'Your checkout punch has been recorded successfully. Work hours telemetry saved.',
-        [{ text: 'OK', onPress: () => fetchTodayAttendance() }]
+        [{ text: 'OK' }]
       );
     } catch (err: any) {
       Alert.alert(
@@ -872,10 +855,6 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
                   ? `Shift Active • ${todayPunctualityMeta.label}`
                   : isShiftConcluded
                   ? `Shift Concluded • Out at ${checkOutTimeString}`
-                  : !shiftInfo.isCheckInAllowed
-                  ? shiftInfo.isAfterShiftEnd
-                    ? 'Check-In Closed • Shift Ended at 18:00'
-                    : 'Check-In Closed • Opens 9:00 AM'
                   : 'Ready to Check In'}
               </Text>
               <Text style={styles.bannerSubtitleText} numberOfLines={1}>
@@ -920,34 +899,8 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
                   Shift Logged
                 </Text>
               </TouchableOpacity>
-            ) : shiftInfo.isAfterShiftEnd ? (
-              /* AFTER 06:00 PM IST: HIDE / DISABLE CHECK IN - NO OPTION TO CHECK IN */
-              <View style={[styles.bannerLockedBtn, { backgroundColor: '#F8FAFC', borderColor: '#E2E8F0' }]}>
-                <Lock size={15} color="#94A3B8" style={{ marginRight: 6 }} />
-                <Text style={[styles.bannerLockedBtnText, { color: '#64748B' }]}>
-                  Shift Ended (18:00)
-                </Text>
-              </View>
-            ) : !shiftInfo.isCheckInAllowed ? (
-              /* BEFORE 09:00 AM IST */
-              <TouchableOpacity
-                style={styles.bannerLockedBtn}
-                onPress={() =>
-                  Alert.alert(
-                    'Check-In Closed',
-                    'Shift check-in is closed (06:00 PM – 09:00 AM IST).\n\nCheck-in will reopen at 09:00 AM today.',
-                    [{ text: 'OK' }]
-                  )
-                }
-                activeOpacity={0.7}
-              >
-                <Lock size={15} color="#64748B" style={{ marginRight: 6 }} />
-                <Text style={styles.bannerLockedBtnText}>
-                  Opens 9:00 AM
-                </Text>
-              </TouchableOpacity>
             ) : (
-              /* ENABLED CHECK IN BUTTON BETWEEN 09:00 AM AND 06:00 PM */
+              /* ENABLED CHECK IN BUTTON ANY TIME */
               <TouchableOpacity
                 style={styles.bannerCheckInBtn}
                 onPress={handleCheckIn}
@@ -985,7 +938,7 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
         <View style={styles.timingNoticeStrip}>
           <Clock size={13} color="#2563EB" style={{ marginRight: 6 }} />
           <Text style={styles.timingNoticeText}>
-            Shift Window: 09:00 AM – 06:00 PM IST | After 06:00 PM Disabled (Reopens 09:00 AM) | Auto Check-Out at 06:00 PM
+            Shift Window: Flexible Field Duty | Manual Check-In & Check-Out Required
           </Text>
         </View>
 
