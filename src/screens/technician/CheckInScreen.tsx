@@ -88,8 +88,8 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
   }, [todayRecord, user]);
 
   const isAlreadyCheckedIn = useMemo(() => {
-    return todayStatus === 'active' || todayStatus === 'completed' || Boolean(todayRecord?.checkIn);
-  }, [todayStatus, todayRecord]);
+    return isRecordForCurrentUser && (todayStatus === 'active' || todayStatus === 'completed' || Boolean(todayRecord?.checkIn));
+  }, [todayStatus, todayRecord, isRecordForCurrentUser]);
 
   // Substation List
   const [sites, setSites] = useState<Substation[]>([]);
@@ -395,12 +395,10 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
 
   const distanceFormatted = formatDistance(distanceToSiteMeters);
 
-  // Check if User is strictly within the Substation's Geofence (<= 500m)
+  // Check if User is strictly within the Substation's Geofence (Unlocked for temporary testing)
   const isInside = useMemo(() => {
-    if (!selectedSite || latitude === 0 || longitude === 0) return false;
-    const allowedRadius = selectedSite.radiusMeters || 500;
-    return distanceToSiteMeters <= allowedRadius;
-  }, [distanceToSiteMeters, selectedSite, latitude, longitude]);
+    return true;
+  }, []);
 
   // Shift Timing Check
   const shiftInfo = useMemo(() => getShiftInfo(), []);
@@ -575,7 +573,8 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
       return;
     }
 
-    // 1b. Geofence Lock Check:
+    // Temporary bypass for testing: Check-in is fully opened anytime/anywhere
+    /*
     if (!isInside) {
       Alert.alert(
         'Check-In Locked: Outside Geofence Area',
@@ -585,7 +584,6 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
       return;
     }
 
-    // 2. Shift Window Check:
     if (!shiftInfo.isCheckInAllowed) {
       Alert.alert(
         'Check-In Closed',
@@ -596,6 +594,7 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
       );
       return;
     }
+    */
 
     // 3. Open Camera Modal
     setCapturedPhotoUri(null);
@@ -629,6 +628,8 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
 
   // Submit Check-In (Photo is COMPULSORY)
   const handleSubmitCheckIn = async () => {
+    // Temporary bypass for testing: Check-in permitted anytime
+    /*
     const currentShift = getShiftInfo();
     if (!currentShift.isCheckInAllowed || currentShift.isAfterShiftEnd) {
       Alert.alert(
@@ -638,6 +639,7 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
       );
       return;
     }
+    */
 
     if (isAlreadyCheckedIn) {
       Alert.alert(

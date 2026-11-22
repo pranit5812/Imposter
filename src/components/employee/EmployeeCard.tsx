@@ -77,9 +77,9 @@ export const EmployeeCard: React.FC<EmployeeCardProps> = ({
           {employee.name}
         </Text>
 
-        {/* Employee ID, Phone & Designation */}
+        {/* Employee ID, Phone, Email & Designation */}
         <Text style={styles.subText} numberOfLines={1}>
-          {employee.employeeId}{employee.phone ? ` • ${sanitizePhoneNumber(employee.phone)}` : ''} | {employee.designation || 'Junior Engineer'}
+          {employee.employeeId}{employee.phone ? ` • ${sanitizePhoneNumber(employee.phone)}` : ''}{employee.email ? ` • ${employee.email}` : ''} | {employee.designation || 'Junior Engineer'}
         </Text>
 
         {/* Tags Row */}

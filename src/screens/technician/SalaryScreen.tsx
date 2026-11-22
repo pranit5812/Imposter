@@ -95,84 +95,8 @@ export const SalaryScreen: React.FC = () => {
     setRefreshing(false);
   };
 
-  // Download Official Payslip PDF / Document uploaded by Admin
   const handleDownload = async () => {
-    setDownloading(true);
-    try {
-      const token = useAuthStore.getState().token;
-      const targetEmpId = slip?.employeeId || user?.employeeId || currentUserId;
-      const rawFileName =
-        slip?.fileName ||
-        `Salary_Slip_${MONTH_NAMES[selectedMonth - 1]}_${selectedYear}.pdf`;
-      let filename = rawFileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-      if (!filename.toLowerCase().endsWith('.pdf')) {
-        filename = filename.replace(/\.[^/.]+$/, '') + '.pdf';
-        if (!filename.toLowerCase().endsWith('.pdf')) {
-          filename += '.pdf';
-        }
-      }
-
-      if (Platform.OS === 'web') {
-        const res = await salaryService.downloadPayslipFile(targetEmpId, selectedMonth, selectedYear, filename);
-        if (!res.success) {
-          const fallbackUrl = salaryService.getDownloadUrl(targetEmpId, selectedMonth, selectedYear, token || undefined);
-          window.open(fallbackUrl, '_blank');
-        }
-        setDownloading(false);
-        return;
-      }
-
-      const url = salaryService.getDownloadUrl(targetEmpId, selectedMonth, selectedYear, token || undefined);
-      let downloadedUri: string | null = null;
-      try {
-        const destination = new ExpoFile(Paths.document, filename);
-        const downloadedFile = await ExpoFile.downloadFileAsync(url, destination, {
-          headers: {
-            Authorization: token ? `Bearer ${token}` : '',
-          },
-        });
-        downloadedUri = downloadedFile.uri;
-      } catch (expoErr) {
-        // Fallback to legacy FileSystem download
-        try {
-          const FileSystemLegacy = require('expo-file-system/legacy');
-          const destUri = `${FileSystemLegacy.documentDirectory}${filename}`;
-          const res = await FileSystemLegacy.downloadAsync(url, destUri, {
-            headers: {
-              Authorization: token ? `Bearer ${token}` : '',
-            },
-          });
-          downloadedUri = res.uri;
-        } catch {
-          throw expoErr;
-        }
-      }
-
-      const canShare = await Sharing.isAvailableAsync();
-      if (canShare && downloadedUri) {
-        await Sharing.shareAsync(downloadedUri, {
-          mimeType: 'application/pdf',
-          dialogTitle: `Adani Salary Slip - ${slip?.employeeName || user?.name || 'Employee'} (${MONTH_NAMES[selectedMonth - 1]} ${selectedYear})`,
-          UTI: 'com.adobe.pdf',
-        });
-      } else if (downloadedUri) {
-        Alert.alert(
-          'Salary Slip Downloaded',
-          `Successfully saved ${filename} as an official PDF to your device.\n\nPath: ${downloadedUri}`
-        );
-      }
-    } catch (err: any) {
-      console.warn('Salary slip download error:', err);
-      const targetEmpId = slip?.employeeId || user?.employeeId || currentUserId;
-      const url = salaryService.getDownloadUrl(targetEmpId, selectedMonth, selectedYear);
-      try {
-        await Linking.openURL(url);
-      } catch (linkErr) {
-        Alert.alert('Download Error', err.message || 'Failed to download salary slip. Please try again.');
-      }
-    } finally {
-      setDownloading(false);
-    }
+    Alert.alert('Salary Slip', 'No auto-generated PDF available. Please wait for the admin to manually upload your salary slip.');
   };
 
   let rawDocName =
@@ -183,7 +107,7 @@ export const SalaryScreen: React.FC = () => {
   }
   const documentName = rawDocName;
 
-  const isDocumentAvailable = Boolean(slip?.hasUploadedDocument && slip?.fileName);
+  const isDocumentAvailable = isSupervisor ? Boolean(slip?.hasUploadedDocument && slip?.fileName) : false;
 
   return (
     <View style={styles.container}>

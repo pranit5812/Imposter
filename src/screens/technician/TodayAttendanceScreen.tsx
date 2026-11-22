@@ -262,10 +262,9 @@ export const TodayAttendanceScreen: React.FC<TodayAttendanceScreenProps> = ({ na
     ? `${checkOut.latitude.toFixed(6)}, ${checkOut.longitude.toFixed(6)}`
     : '--';
 
-  // Supervisor / Admin note
   const adminNote =
     effectiveRecord?.adminRemarks ||
-    (checkOut?.remarks ? checkOut.remarks : effectiveRecord ? 'Auto-checked out at 06:00 PM (Shift End)' : 'No shift notes for today');
+    (checkOut?.remarks ? checkOut.remarks : 'No shift notes for today');
 
   if (initialLoading && !effectiveRecord && !todayRecord) {
     return <LoadingSpinner message="Loading attendance status..." />;
@@ -517,7 +516,7 @@ export const TodayAttendanceScreen: React.FC<TodayAttendanceScreenProps> = ({ na
               ) : (
                 <View style={[styles.primaryActionButton, { backgroundColor: '#F1F5F9' }]}>
                   <Text style={[styles.primaryActionButtonText, { color: '#64748B' }]}>
-                    Check-In Closed (After 06:00 PM)
+                    Ready for Check-In
                   </Text>
                 </View>
               )}

@@ -50,12 +50,26 @@ export const useAttendanceStore = create<AttendanceState>((set, get) => ({
     }
     try {
       const data = await attendanceService.getTodayAttendance();
-      const elapsedSec = (data.liveElapsedMinutes || 0) * 60;
+      const hasRealCheckIn = Boolean(
+        data?.record?.checkIn && (data.record.checkIn.time || (data.record.checkIn as any).timeIST)
+      );
+      const hasRealCheckOut = Boolean(
+        data?.record?.checkOut && (data.record.checkOut.time || (data.record.checkOut as any).timeIST)
+      );
+
+      let realStatus: 'not_started' | 'active' | 'completed' = 'not_started';
+      if (hasRealCheckIn && !hasRealCheckOut) {
+        realStatus = 'active';
+      } else if (hasRealCheckIn && hasRealCheckOut) {
+        realStatus = 'completed';
+      }
+
+      const elapsedSec = realStatus === 'active' ? (data?.liveElapsedMinutes || 0) * 60 : 0;
       set({
-        todayStatus: data.status,
-        todayRecord: data.record,
-        assignedSite: data.site,
-        assignedSites: data.sites || (data.site ? [data.site] : []),
+        todayStatus: realStatus,
+        todayRecord: realStatus !== 'not_started' ? data.record : null,
+        assignedSite: data?.site || null,
+        assignedSites: data?.sites || (data?.site ? [data.site] : []),
         liveElapsedSeconds: elapsedSec,
         isLoading: false,
       });

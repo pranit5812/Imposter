@@ -109,7 +109,9 @@ export const CheckOutScreen: React.FC<CheckOutScreenProps> = ({ navigation }) =>
   const handleConfirmCheckout = async () => {
     setSubmitting(true);
     try {
+      const activeRecordId = todayRecord?.id || (todayRecord as any)?._id;
       const record = await attendanceService.checkOut({
+        recordId: activeRecordId,
         latitude: latitude || (assignedSite?.latitude || 0),
         longitude: longitude || (assignedSite?.longitude || 0),
         accuracy: accuracy || 15,
@@ -127,7 +129,8 @@ export const CheckOutScreen: React.FC<CheckOutScreenProps> = ({ navigation }) =>
         [{ text: 'Return to Dashboard', onPress: () => navigation.navigate('Dashboard') }]
       );
     } catch (err: any) {
-      Alert.alert('Checkout Error', err.message || 'Failed to submit check-out');
+      const { getFriendlyErrorMessage } = require('../../services/api');
+      Alert.alert('Check-Out Notice', getFriendlyErrorMessage(err) || 'Check-out could not be processed. Please ensure you are checked in and try again.');
     } finally {
       setSubmitting(false);
     }

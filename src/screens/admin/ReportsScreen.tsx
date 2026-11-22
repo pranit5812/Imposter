@@ -32,6 +32,7 @@ import {
   Menu,
   Info,
   Sparkles,
+  Search,
 } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -125,6 +126,7 @@ export const ReportsScreen: React.FC = () => {
   const [markModalVisible, setMarkModalVisible] = useState<boolean>(false);
   const [markEmpId, setMarkEmpId] = useState<string>('');
   const [markEmpName, setMarkEmpName] = useState<string>('');
+  const [markEmpSearchQuery, setMarkEmpSearchQuery] = useState<string>('');
   const [markDate, setMarkDate] = useState<string>('');
   const [markStatus, setMarkStatus] = useState<'P' | 'A' | 'HD'>('P');
   const [markRemarks, setMarkRemarks] = useState<string>('Marked Present by Operations Admin');
@@ -182,6 +184,7 @@ export const ReportsScreen: React.FC = () => {
       return;
     }
 
+    setMarkEmpSearchQuery('');
     if (emp) {
       setMarkEmpId(emp.employeeCode || emp.employeeName);
       setMarkEmpName(`${emp.employeeName} (${emp.employeeCode})`);
@@ -816,15 +819,13 @@ Synchronized across all dashboards and muster reports.`,
                 </View>
               ) : (
                 musterRecords.map((row, index) => (
-                  <TouchableOpacity delayPressIn={0}
+                  <View
                     key={row.sr || index}
                     style={[
                       styles.frozenRowCell,
                       { height: 46 },
                       index % 2 === 1 && { backgroundColor: '#F8FAFC' },
                     ]}
-                    onPress={() => setSelectedEmpComp(row)}
-                    activeOpacity={0.7}
                   >
                     <Text style={styles.frozenEmpName} numberOfLines={1}>
                       {row.sr}. {row.employeeName}
@@ -832,7 +833,7 @@ Synchronized across all dashboards and muster reports.`,
                     <Text style={styles.frozenEmpSub} numberOfLines={1}>
                       {row.employeeCode} • {row.designation}
                     </Text>
-                  </TouchableOpacity>
+                  </View>
                 ))
               )}
             </View>
@@ -1045,124 +1046,6 @@ Synchronized across all dashboards and muster reports.`,
         </View>
       </ScrollView>
 
-      {/* Employee Attendance & Compensation Detail Modal */}
-      <Modal
-        visible={selectedEmpComp !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setSelectedEmpComp(null)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.markModalCard, { maxWidth: 520 }]}>
-            <View style={styles.markModalHeader}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.markModalTitle}>Attendance & Compensation</Text>
-                <Text style={styles.markModalSub}>
-                  {selectedEmpComp?.employeeName} ({selectedEmpComp?.employeeCode}) • {monthName}
-                </Text>
-              </View>
-              <TouchableOpacity delayPressIn={0}
-                style={styles.modalCloseBtn}
-                onPress={() => setSelectedEmpComp(null)}
-              >
-                <X size={18} color="#64748B" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
-              {/* Monthly Attendance Breakdown */}
-              <Text style={[styles.inputFieldLabel, { marginTop: 8 }]}>MONTHLY ATTENDANCE TOTALS</Text>
-              <View style={styles.legendGrid}>
-                <View style={[styles.legendItem, { width: '48%', backgroundColor: '#F0FDF4', padding: 8, borderRadius: 8 }]}>
-                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#166534' }}>Present (P)</Text>
-                  <Text style={{ fontSize: 16, fontWeight: '900', color: '#166534', marginTop: 2 }}>
-                    {selectedEmpComp?.summary.P || 0} Days
-                  </Text>
-                </View>
-                <View style={[styles.legendItem, { width: '48%', backgroundColor: '#FFEDD5', padding: 8, borderRadius: 8 }]}>
-                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#C2410C' }}>Half Days (HD)</Text>
-                  <Text style={{ fontSize: 16, fontWeight: '900', color: '#C2410C', marginTop: 2 }}>
-                    {selectedEmpComp?.summary.HD || 0} Days
-                  </Text>
-                </View>
-                <View style={[styles.legendItem, { width: '48%', backgroundColor: '#FEF2F2', padding: 8, borderRadius: 8, marginTop: 6 }]}>
-                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#991B1B' }}>Absent (A)</Text>
-                  <Text style={{ fontSize: 16, fontWeight: '900', color: '#991B1B', marginTop: 2 }}>
-                    {selectedEmpComp?.summary.A || 0} Days
-                  </Text>
-                </View>
-                <View style={[styles.legendItem, { width: '48%', backgroundColor: '#DBEAFE', padding: 8, borderRadius: 8, marginTop: 6 }]}>
-                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#1E40AF' }}>Weekly Off (WO)</Text>
-                  <Text style={{ fontSize: 16, fontWeight: '900', color: '#1E40AF', marginTop: 2 }}>
-                    {selectedEmpComp?.summary.WO || 0} Days
-                  </Text>
-                </View>
-              </View>
-
-              {/* Attendance-Based Compensation Breakdown */}
-              <Text style={[styles.inputFieldLabel, { marginTop: 14 }]}>ATTENDANCE-BASED SALARY CALCULATION</Text>
-              {selectedEmpComp?.compensation ? (
-                <View style={{ backgroundColor: '#F8FAFC', borderRadius: 8, padding: 12, borderWidth: 1, borderColor: '#E2E8F0' }}>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <Text style={{ fontSize: 12, color: '#475569' }}>Monthly Base Salary:</Text>
-                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#0F172A' }}>
-                      ₹{selectedEmpComp.compensation.monthlySalary.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </Text>
-                  </View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <Text style={{ fontSize: 12, color: '#DC2626' }}>
-                      Absent Deduction ({selectedEmpComp.summary.A} × ₹{selectedEmpComp.compensation.absentDeductionRate}):
-                    </Text>
-                    <Text style={{ fontSize: 12, fontWeight: '700', color: '#DC2626' }}>
-                      -₹{selectedEmpComp.compensation.absentDeductionTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </Text>
-                  </View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <Text style={{ fontSize: 12, color: '#EA580C' }}>
-                      Half-Day Deduction ({selectedEmpComp.summary.HD || 0} × ₹{selectedEmpComp.compensation.halfDayDeductionRate}):
-                    </Text>
-                    <Text style={{ fontSize: 12, fontWeight: '700', color: '#EA580C' }}>
-                      -₹{selectedEmpComp.compensation.halfDayDeductionTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </Text>
-                  </View>
-                  <View style={{ height: 1, backgroundColor: '#CBD5E1', marginVertical: 6 }} />
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <Text style={{ fontSize: 12, fontWeight: '600', color: '#334155' }}>Total Deductions:</Text>
-                    <Text style={{ fontSize: 13, fontWeight: '800', color: '#DC2626' }}>
-                      -₹{selectedEmpComp.compensation.totalDeductions.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </Text>
-                  </View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4, backgroundColor: '#ECFDF5', padding: 8, borderRadius: 6 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '800', color: '#065F46' }}>Net Payable Take-Home:</Text>
-                    <Text style={{ fontSize: 15, fontWeight: '900', color: '#059669' }}>
-                      ₹{selectedEmpComp.compensation.netPayableSalary.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </Text>
-                  </View>
-                </View>
-              ) : null}
-            </ScrollView>
-
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 10 }}>
-              <TouchableOpacity delayPressIn={0}
-                style={[styles.cancelBtn, { paddingHorizontal: 16 }]}
-                onPress={() => setSelectedEmpComp(null)}
-              >
-                <Text style={styles.cancelBtnText}>Close</Text>
-              </TouchableOpacity>
-              <TouchableOpacity delayPressIn={0}
-                style={[styles.saveMarkBtn, { paddingHorizontal: 16, backgroundColor: '#2563EB' }]}
-                onPress={() => {
-                  setSelectedEmpComp(null);
-                  navigation.navigate('Salary');
-                }}
-              >
-                <Text style={styles.saveMarkBtnText}>Open Salary Slip</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
       {/* Public Holiday Info Modal (Requirement 4) */}
       <Modal
         visible={holidayTooltip.visible}
@@ -1311,27 +1194,46 @@ Synchronized across all dashboards and muster reports.`,
             </View>
 
             <View style={styles.markModalBody}>
-              {/* Employee Selector */}
+              {/* Employee Selector with Search Bar inside Dropdown */}
               <Text style={styles.inputFieldLabel}>FIELD EMPLOYEE</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 10, paddingHorizontal: 12, height: 42, marginBottom: 12 }}>
+                <Search size={16} color="#94A3B8" style={{ marginRight: 8 }} />
+                <TextInput
+                  style={{ flex: 1, fontSize: 13, color: '#0F172A', padding: 0 }}
+                  value={markEmpSearchQuery}
+                  onChangeText={setMarkEmpSearchQuery}
+                  placeholder="Search field employee by name or ID..."
+                  placeholderTextColor="#94A3B8"
+                />
+              </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
                 <View style={{ flexDirection: 'row', gap: 6 }}>
-                  {musterRecords.map((mr) => {
-                    const isSelected = markEmpId === (mr.employeeCode || mr.employeeName);
-                    return (
-                      <TouchableOpacity delayPressIn={0}
-                        key={mr.employeeCode || mr.sr}
-                        style={[styles.empPill, isSelected && styles.empPillActive]}
-                        onPress={() => {
-                          setMarkEmpId(mr.employeeCode || mr.employeeName);
-                          setMarkEmpName(`${mr.employeeName} (${mr.employeeCode})`);
-                        }}
-                      >
-                        <Text style={[styles.empPillText, isSelected && styles.empPillTextActive]}>
-                          {mr.employeeName}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
+                  {musterRecords
+                    .filter((mr) => {
+                      if (!markEmpSearchQuery.trim()) return true;
+                      const q = markEmpSearchQuery.toLowerCase();
+                      return (
+                        (mr.employeeName || '').toLowerCase().includes(q) ||
+                        (mr.employeeCode || '').toLowerCase().includes(q)
+                      );
+                    })
+                    .map((mr) => {
+                      const isSelected = markEmpId === (mr.employeeCode || mr.employeeName);
+                      return (
+                        <TouchableOpacity delayPressIn={0}
+                          key={mr.employeeCode || mr.sr}
+                          style={[styles.empPill, isSelected && styles.empPillActive]}
+                          onPress={() => {
+                            setMarkEmpId(mr.employeeCode || mr.employeeName);
+                            setMarkEmpName(`${mr.employeeName} (${mr.employeeCode})`);
+                          }}
+                        >
+                          <Text style={[styles.empPillText, isSelected && styles.empPillTextActive]}>
+                            {mr.employeeName}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
                 </View>
               </ScrollView>
 

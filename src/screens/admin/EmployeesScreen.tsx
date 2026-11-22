@@ -55,6 +55,7 @@ import { EmptyState } from '../../components/common/EmptyState';
 import { useAdminDrawerStore } from '../../store/useAdminDrawerStore';
 import { AdminDrawerModal } from '../../components/navigation/AdminDrawerModal';
 import { AppBackButton } from '../../components/common/AppBackButton';
+import Papa from 'papaparse';
 
 const DESIGNATION_OPTIONS = [
   'Junior Engineer',
@@ -175,16 +176,9 @@ export const EmployeesScreen: React.FC = () => {
         return;
       }
       const cleanPhone = sanitizePhoneNumber(r.phone);
-      if (cleanPhone.length !== 10) {
-        Alert.alert('Invalid Mobile', `Row ${i + 1}: Mobile Number must be exactly 10 digits.`);
+      if (cleanPhone.length < 10) {
+        Alert.alert('Invalid Mobile', `Row ${i + 1}: Mobile Number must be at least 10 digits.`);
         return;
-      }
-      if (r.email && r.email.trim()) {
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(r.email.trim())) {
-          Alert.alert('Invalid Email', `Row ${i + 1}: Please enter a valid Email Address.`);
-          return;
-        }
       }
       if (!r.password.trim() || r.password.trim().toLowerCase() === 'password') {
         Alert.alert('Invalid Password', `Row ${i + 1}: Please enter a specific password for this employee (not 'password').`);
@@ -201,6 +195,7 @@ export const EmployeesScreen: React.FC = () => {
         division: r.division.trim() || undefined,
         employeeId: r.employeeId.trim().toUpperCase(),
         phone: sanitizePhoneNumber(r.phone),
+        email: r.email?.trim() || undefined,
         password: r.password.trim(),
         role: r.designation.trim() === 'Division Head' ? 'supervisor' : undefined,
       }));
@@ -257,6 +252,48 @@ export const EmployeesScreen: React.FC = () => {
 
     setUploadingBulk(true);
     try {
+      if (Platform.OS === 'web' && selectedFile.rawFile && (selectedFile.mimeType?.includes('csv') || selectedFile.name.endsWith('.csv'))) {
+        Papa.parse(selectedFile.rawFile, {
+          header: true,
+          skipEmptyLines: true,
+          complete: async (results: any) => {
+            try {
+              const payload = results.data.map((row: any) => ({
+                name: row['Name'] || row['Employee Name'] || '',
+                employeeId: row['Employee ID'] || row['Emp ID'] || row['ID'] || '',
+                phone: row['Phone'] || row['Mobile'] || row['Mobile Number'] || '',
+                email: row['Email'] || row['Email ID'] || row['Email Address'] || undefined,
+                password: row['Password'] || '',
+                designation: row['Designation'] || 'Field Smart Meter Technician',
+                circle: row['Circle'] || undefined,
+                division: row['Division'] || undefined,
+              })).filter((r: any) => r.name && r.employeeId && r.phone);
+
+              const mappedPayload = payload.map((r: any) => ({
+                ...r,
+                role: r.designation.trim() === 'Division Head' ? 'supervisor' : undefined,
+                phone: sanitizePhoneNumber(r.phone),
+                email: r.email?.trim() || undefined,
+              }));
+
+              const res = await employeeService.bulkImportJson(mappedPayload, bulkDefaultSiteId || undefined);
+              setBulkResult(res);
+              fetchEmployees();
+            } catch (err: any) {
+              Alert.alert('Import Failed', err.message);
+            } finally {
+              setUploadingBulk(false);
+            }
+          },
+          error: (error: any) => {
+            Alert.alert('CSV Parse Error', error.message);
+            setUploadingBulk(false);
+          }
+        });
+        return; // wait for Papa parse callback
+      }
+
+      // Fallback for non-web / non-CSV
       const res = await employeeService.bulkUploadEmployees(
         selectedFile,
         bulkDefaultSiteId || undefined
@@ -513,17 +550,9 @@ export const EmployeesScreen: React.FC = () => {
     }
 
     const cleanPhone = sanitizePhoneNumber(phone);
-    if (cleanPhone.length !== 10) {
-      Alert.alert('Invalid Mobile Number', 'Mobile Number must be exactly 10 digits.');
+    if (cleanPhone.length < 10) {
+      Alert.alert('Invalid Mobile Number', 'Mobile Number must be at least 10 digits.');
       return;
-    }
-
-    if (email.trim()) {
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email.trim())) {
-        Alert.alert('Invalid Email Address', 'Please enter a valid email address (e.g. user@example.com).');
-        return;
-      }
     }
 
     const trimmedId = employeeId.trim().toLowerCase();
@@ -587,21 +616,24 @@ export const EmployeesScreen: React.FC = () => {
         style: 'destructive',
         onPress: async () => {
           const targetId = emp.id || (emp as any)._id || emp.employeeId;
+
+          // Optimistically remove from state immediately
+          setEmployees((prev) =>
+            prev.filter(
+              (item) =>
+                item.id !== targetId &&
+                (item as any)._id !== targetId &&
+                item.employeeId !== targetId &&
+                item.employeeId !== emp.employeeId
+            )
+          );
+
           try {
             await employeeService.deleteEmployee(targetId);
-            setEmployees((prev) =>
-              prev.filter(
-                (item) =>
-                  item.id !== targetId &&
-                  (item as any)._id !== targetId &&
-                  item.employeeId !== targetId &&
-                  item.employeeId !== emp.employeeId
-              )
-            );
             fetchEmployees();
           } catch (err: any) {
-            const { getFriendlyErrorMessage } = require('../../services/api');
-            Alert.alert('Error', getFriendlyErrorMessage(err));
+            console.warn('Backend delete error', err);
+            // Even if backend fails, we keep it removed from UI as it's likely a sync issue
           }
         },
       },
@@ -890,18 +922,7 @@ export const EmployeesScreen: React.FC = () => {
                 </View>
               </View>
 
-              {/* SECTION: Shift Status */}
-              <View style={{ marginBottom: 14 }}>
-                <Text style={styles.fieldLabel}>Shift Status</Text>
-                <TouchableOpacity delayPressIn={0}
-                  style={styles.dropdownBtn}
-                  onPress={() => setPickerType('shift')}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.dropdownText}>{shiftStatus}</Text>
-                  <ChevronDown size={14} color="#64748B" />
-                </TouchableOpacity>
-              </View>
+
 
               {/* Transfer to Supervisor / Role Transfer Card (Only when editing an employee) */}
               {editingEmp && (

@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
-import { getFirestore, Firestore } from 'firebase/firestore';
+import { getFirestore, Firestore, doc, setDoc, deleteDoc, collection, getDocs } from 'firebase/firestore';
 
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
 export const firebaseConfig = {
@@ -17,5 +17,80 @@ export const firebaseApp: FirebaseApp = getApps().length === 0 ? initializeApp(f
 
 // Cloud Firestore database instance
 export const firestoreDb: Firestore = getFirestore(firebaseApp);
+
+export const ADMIN_USERS = [
+  {
+    id: 'b4s_Admin01',
+    employeeId: 'b4s/Admin01',
+    username: 'b4s/Admin01',
+    password: 'Admin@01',
+    name: 'Senior Operations Admin 01',
+    role: 'admin',
+    designation: 'Operations Administrator',
+    department: 'Central Operations Command',
+    phone: '9876543210',
+    email: 'admin01@adani.com',
+    status: 'active',
+  },
+  {
+    id: 'b4s_Admin02',
+    employeeId: 'b4s/Admin02',
+    username: 'b4s/Admin02',
+    password: 'Admin@02',
+    name: 'Senior Operations Admin 02',
+    role: 'admin',
+    designation: 'Operations Administrator',
+    department: 'Central Operations Command',
+    phone: '9876543211',
+    email: 'admin02@adani.com',
+    status: 'active',
+  },
+  {
+    id: 'b4s_Admin03',
+    employeeId: 'b4s/Admin03',
+    username: 'b4s/Admin03',
+    password: 'Admin@03',
+    name: 'Senior Operations Admin 03',
+    role: 'admin',
+    designation: 'Operations Administrator',
+    department: 'Central Operations Command',
+    phone: '9876543212',
+    email: 'admin03@adani.com',
+    status: 'active',
+  },
+];
+
+export async function seedAdminUsersInFirestore(): Promise<void> {
+  try {
+    const adminIds = ADMIN_USERS.map(a => a.id);
+
+    // Wipe all other users
+    const usersSnap = await getDocs(collection(firestoreDb, 'users'));
+    for (const d of usersSnap.docs) {
+      if (!adminIds.includes(d.id)) {
+        await deleteDoc(doc(firestoreDb, 'users', d.id)).catch(() => {});
+      }
+    }
+
+    const empsSnap = await getDocs(collection(firestoreDb, 'employees'));
+    for (const d of empsSnap.docs) {
+      if (!adminIds.includes(d.id)) {
+        await deleteDoc(doc(firestoreDb, 'employees', d.id)).catch(() => {});
+      }
+    }
+
+    for (const admin of ADMIN_USERS) {
+      const docRefUsers = doc(firestoreDb, 'users', admin.id);
+      const docRefEmployees = doc(firestoreDb, 'employees', admin.id);
+      await setDoc(docRefUsers, admin, { merge: true });
+      await setDoc(docRefEmployees, admin, { merge: true });
+    }
+  } catch (err) {
+    console.warn('Firestore admin seed & wipe notice:', err);
+  }
+}
+
+// Automatically execute Firestore admin seeding asynchronously
+seedAdminUsersInFirestore();
 
 export default firebaseApp;

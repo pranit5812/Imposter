@@ -29,50 +29,19 @@ export const getShiftInfo = (): ShiftInfo => {
   const displayHours = istHours % 12 || 12;
   const formattedTimeIST = `${displayHours}:${istMinutes < 10 ? '0' : ''}${istMinutes} ${ampm}`;
 
-  // Allow check-in any time. Determine punctuality based on time:
-  // Before 09:30 AM -> On-Time
-  // 09:30 AM to 10:30 AM -> Late
-  // After 10:30 AM -> Half-Day
-  if (istTotalMinutes <= 9 * 60 + 30) {
-    return {
-      isCheckInAllowed: true,
-      isPastShiftEnd: false,
-      isBeforeShiftStart: false,
-      isAfterShiftEnd: false,
-      punctualityLabel: 'On-Time',
-      statusKey: 'present',
-      istHours,
-      istMinutes,
-      formattedTimeIST,
-      windowMessage: 'Check-in window active',
-    };
-  } else if (istTotalMinutes <= 10 * 60 + 30) {
-    return {
-      isCheckInAllowed: true,
-      isPastShiftEnd: false,
-      isBeforeShiftStart: false,
-      isAfterShiftEnd: false,
-      punctualityLabel: 'Late Checked-In',
-      statusKey: 'late',
-      istHours,
-      istMinutes,
-      formattedTimeIST,
-      windowMessage: 'Check-in window active (Late)',
-    };
-  } else {
-    return {
-      isCheckInAllowed: true,
-      isPastShiftEnd: false,
-      isBeforeShiftStart: false,
-      isAfterShiftEnd: false,
-      punctualityLabel: 'Half-Day',
-      statusKey: 'half-day',
-      istHours,
-      istMinutes,
-      formattedTimeIST,
-      windowMessage: 'Check-in window active (Half-Day)',
-    };
-  }
+  // Remove all 9:00 AM & 6:00 PM restrictions. Always allow check in and never force shift end.
+  return {
+    isCheckInAllowed: true,
+    isPastShiftEnd: false,
+    isBeforeShiftStart: false,
+    isAfterShiftEnd: false,
+    punctualityLabel: 'On-Time',
+    statusKey: 'present',
+    istHours,
+    istMinutes,
+    formattedTimeIST,
+    windowMessage: 'Check-in window active',
+  };
 };
 
 export const isShiftConcluded = (): boolean => {

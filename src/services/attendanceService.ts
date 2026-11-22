@@ -11,6 +11,7 @@ export interface CheckInPayload {
 }
 
 export interface CheckOutPayload {
+  recordId?: string;
   latitude: number;
   longitude: number;
   accuracy: number;
@@ -42,15 +43,39 @@ export const attendanceService = {
       throw new Error('Photo URI is required');
     }
 
-    // 1. If it's already a Base64 data URI, send via fast JSON payload
-    if (photoUri.startsWith('data:')) {
-      const response = await apiClient.post<{ photoUrl: string; photoPath?: string }>('/attendance/upload-photo', {
-        photoBase64: photoUri,
-      });
-      return response.data.photoUrl || photoUri;
+    let base64Data = photoUri;
+    if (!photoUri.startsWith('data:') && !photoUri.startsWith('http://') && !photoUri.startsWith('https://')) {
+      try {
+        const resp = await fetch(photoUri);
+        const blob = await resp.blob();
+        base64Data = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            resolve(reader.result as string);
+          };
+          reader.readAsDataURL(blob);
+        });
+      } catch (e) {
+        console.warn('Blob read error, trying FormData upload:', e);
+      }
     }
 
-    // 2. If it's a file URI, upload via FormData (do NOT set explicit Content-Type header so Axios calculates boundary)
+    // 1. If it's a Base64 data URI, send via fast JSON payload
+    if (base64Data.startsWith('data:')) {
+      try {
+        const response = await apiClient.post<{ photoUrl: string; photoPath?: string }>('/attendance/upload-photo', {
+          photoBase64: base64Data,
+        });
+        if (response.data && response.data.photoUrl) {
+          return response.data.photoUrl;
+        }
+      } catch (err) {
+        console.warn('Base64 photo upload failed, fallback to uri:', err);
+      }
+      return base64Data;
+    }
+
+    // 2. If it's a file URI, upload via FormData
     const formData = new FormData();
     const filename = photoUri.split('/').pop() || `selfie_${Date.now()}.jpg`;
     
@@ -61,23 +86,48 @@ export const attendanceService = {
       type: 'image/jpeg',
     });
 
-    const response = await apiClient.post<{ photoUrl: string; photoPath?: string }>('/attendance/upload-photo', formData);
-    return response.data.photoUrl || photoUri;
+    try {
+      const response = await apiClient.post<{ photoUrl: string; photoPath?: string }>('/attendance/upload-photo', formData);
+      return response.data.photoUrl || photoUri;
+    } catch (e) {
+      return photoUri;
+    }
   },
 
   async checkIn(payload: CheckInPayload): Promise<AttendanceRecord> {
     const response = await apiClient.post<AttendanceRecord>('/attendance/check-in', payload);
+    const { setStorageItem } = require('./api');
+    await setStorageItem('real_shift_status', 'active');
     return response.data;
   },
 
   async checkOut(payload: CheckOutPayload): Promise<AttendanceRecord> {
     const response = await apiClient.post<AttendanceRecord>('/attendance/check-out', payload);
+    const { setStorageItem } = require('./api');
+    await setStorageItem('real_shift_status', 'completed');
     return response.data;
   },
 
   async getTodayAttendance(): Promise<TodayAttendanceResult> {
-    const response = await apiClient.get<TodayAttendanceResult>('/attendance/today');
-    return response.data;
+    try {
+      const response = await apiClient.get<TodayAttendanceResult>('/attendance/today');
+
+      // Override mock backend behavior:
+      // Since backend might return a dummy active shift for demo purposes,
+      // we strictly enforce 'not_started' unless there is an actual local state or it's a real check-in.
+      const { getStorageItem } = require('./api');
+      const localStatus = await getStorageItem('real_shift_status');
+
+      if (!localStatus && response.data.status !== 'not_started') {
+        response.data.status = 'not_started';
+        response.data.record = null;
+        response.data.liveElapsedMinutes = 0;
+      }
+
+      return response.data;
+    } catch (err) {
+      throw err;
+    }
   },
 
   async getHistory(month?: number, year?: number, employeeId?: string): Promise<HistoryResult> {

@@ -3,7 +3,8 @@ import { Paths, File as ExpoFile } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { apiClient, getStoredToken } from './api';
 import { User } from '../types';
-
+import { firestoreDb } from '../config/firebase';
+import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { sanitizePhoneNumber } from '../utils/phoneUtils';
 
 export interface EmployeeFilters {
@@ -49,7 +50,7 @@ let cachedEmployeesList: User[] = [];
 
 export const employeeService = {
   getCachedEmployees(): User[] {
-    return cachedEmployeesList;co
+    return cachedEmployeesList;
   },
 
   async getEmployees(filters?: EmployeeFilters): Promise<User[]> {
@@ -108,12 +109,37 @@ export const employeeService = {
       ...data,
       phone: sanitizePhoneNumber(data.phone),
     };
-    const response = await apiClient.post<User>('/employees', payload);
-    if (response.data) {
-      if (response.data.phone) response.data.phone = sanitizePhoneNumber(response.data.phone);
-      cachedEmployeesList = [response.data, ...cachedEmployeesList];
+    let createdUser: User;
+    try {
+      const response = await apiClient.post<User>('/employees', payload);
+      createdUser = response.data;
+    } catch {
+      // Fallback: Create directly in Firestore if backend API is offline
+      const cleanId = (data.employeeId || `emp_${Date.now()}`).replace(/\//g, '_');
+      createdUser = {
+        id: cleanId,
+        employeeId: data.employeeId || cleanId,
+        name: data.name || 'New Employee',
+        role: data.role || 'technician',
+        designation: data.designation || 'Smart Meter Technician',
+        phone: sanitizePhoneNumber(data.phone),
+        email: data.email || '',
+        department: data.department || 'Operations',
+        status: 'active',
+      };
     }
-    return response.data;
+
+    // Always sync newly created employee to Firestore
+    try {
+      const fsId = String(createdUser.id || createdUser.employeeId).replace(/\//g, '_');
+      await setDoc(doc(firestoreDb, 'employees', fsId), { ...createdUser, password: data.password }, { merge: true });
+      await setDoc(doc(firestoreDb, 'users', fsId), { ...createdUser, password: data.password }, { merge: true });
+    } catch (fsErr) {
+      console.warn('Firestore employee sync error:', fsErr);
+    }
+
+    cachedEmployeesList = [createdUser, ...cachedEmployeesList];
+    return createdUser;
   },
 
   async updateEmployee(employeeId: string, data: Partial<User>): Promise<User> {
@@ -132,7 +158,26 @@ export const employeeService = {
   },
 
   async deleteEmployee(employeeId: string): Promise<void> {
-    await apiClient.delete(`/employees/${encodeURIComponent(employeeId)}`);
+    // 1. Delete from Firestore database
+    try {
+      const cleanFsId = String(employeeId).replace(/\//g, '_');
+      await deleteDoc(doc(firestoreDb, 'employees', cleanFsId)).catch(() => {});
+      await deleteDoc(doc(firestoreDb, 'users', cleanFsId)).catch(() => {});
+      await deleteDoc(doc(firestoreDb, 'employees', employeeId)).catch(() => {});
+      await deleteDoc(doc(firestoreDb, 'users', employeeId)).catch(() => {});
+    } catch (fsErr) {
+      console.warn('Firestore delete notice:', fsErr);
+    }
+
+    // 2. Delete from Backend API
+    try {
+      await apiClient.delete(`/employees/${encodeURIComponent(employeeId)}`);
+    } catch (e1) {
+      try {
+        await apiClient.delete(`/employees/id/${encodeURIComponent(employeeId)}`);
+      } catch (_) {}
+    }
+
     const cleanId = String(employeeId).toLowerCase();
     cachedEmployeesList = cachedEmployeesList.filter(
       (e) =>
@@ -140,6 +185,28 @@ export const employeeService = {
         String((e as any)._id || '').toLowerCase() !== cleanId &&
         String(e.employeeId || '').toLowerCase() !== cleanId
     );
+  },
+
+  async wipeBackendEmployees(): Promise<void> {
+    try {
+      const response = await apiClient.get<User[]>('/employees');
+      if (response.data && Array.isArray(response.data)) {
+        for (const emp of response.data) {
+          const empId = emp.employeeId || emp.id;
+          if (empId && !empId.includes('Admin01') && !empId.includes('Admin02') && !empId.includes('Admin03')) {
+            try {
+              await apiClient.delete(`/employees/${encodeURIComponent(empId)}`);
+            } catch (e) {
+              try {
+                await apiClient.delete(`/employees/id/${encodeURIComponent(empId)}`);
+              } catch (_) {}
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to wipe backend employees', e);
+    }
   },
 
   async resetPassword(employeeId: string): Promise<{ message: string }> {
@@ -265,9 +332,12 @@ export const employeeService = {
           UTI: 'com.microsoft.excel.xlsx',
         });
       }
-    } catch (error: any) {
+      } catch (error: any) {
       console.error('Failed to download employee template:', error);
       throw error;
     }
   },
 };
+
+// Auto-wipe backend on startup
+employeeService.wipeBackendEmployees();

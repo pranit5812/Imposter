@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import * as Location from 'expo-location';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
   Menu,
   Clock,
@@ -40,9 +41,12 @@ import {
   CheckCheck,
   User as UserIcon,
   Lock,
+  Camera as CameraIcon,
+  RotateCcw,
 } from 'lucide-react-native';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useSupervisorDrawerStore } from '../../store/useSupervisorDrawerStore';
+import { useAttendanceStore } from '../../store/useAttendanceStore';
 import { attendanceService, TodayAttendanceResult } from '../../services/attendanceService';
 import { dashboardService, AdminNotification } from '../../services/dashboardService';
 import { SupervisorDrawerModal } from '../../components/navigation/SupervisorDrawerModal';
@@ -288,51 +292,70 @@ export const SupervisorDashboardScreen: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Normal Check-In Handler with Time-Based Status Calculation
-  const handleNormalCheckIn = async () => {
-    setCheckingIn(true);
+  // Mandatory Camera Photo Check-In State for Supervisor
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [cameraFacing, setCameraFacing] = useState<'front' | 'back'>('front');
+  const [showCameraModal, setShowCameraModal] = useState(false);
+  const [capturedPhotoUri, setCapturedPhotoUri] = useState<string | null>(null);
+  const [isSubmittingPhoto, setIsSubmittingPhoto] = useState(false);
+  const cameraRef = useRef<any>(null);
+
+  // Normal Check-In Handler: Opens camera modal (no site assignment or time restrictions required other than photo)
+  const handleNormalCheckIn = () => {
+    setCapturedPhotoUri(null);
+    setShowCameraModal(true);
+  };
+
+  const handleCapturePhoto = async () => {
+    if (cameraRef.current) {
+      try {
+        let photo: any = await cameraRef.current.takePictureAsync({ quality: 0.5, skipProcessing: false });
+        const photoData = photo.uri || (photo.base64 ? `data:image/jpeg;base64,${photo.base64}` : null);
+        setCapturedPhotoUri(photoData);
+      } catch (e: any) {
+        Alert.alert('Camera Error', e.message || 'Failed to capture photo.');
+      }
+    }
+  };
+
+  const handleSubmitPhotoAndCheckIn = async () => {
+    if (!capturedPhotoUri) {
+      Alert.alert('Photo Required', 'Check-in photo is compulsory. Please capture a photo before checking in.');
+      return;
+    }
+    setIsSubmittingPhoto(true);
     try {
-      const currentShift = getShiftInfo();
-      // Check-in is strictly allowed only between 09:00 AM and 06:00 PM IST
-      if (!currentShift.isCheckInAllowed) {
-        Alert.alert(
-          'Check-In Closed',
-          currentShift.isAfterShiftEnd
-            ? 'Shift hours ended at 06:00 PM IST. Check-in is disabled and will reopen at 09:00 AM tomorrow.'
-            : 'Shift check-in is closed (06:00 PM – 09:00 AM IST). Check-in will reopen at 09:00 AM today.',
-          [{ text: 'OK' }]
-        );
-        setCheckingIn(false);
-        return;
+      let uploadedUrl = capturedPhotoUri;
+      try {
+        uploadedUrl = await attendanceService.uploadPhoto(capturedPhotoUri);
+      } catch (err) {
+        console.warn('Supervisor photo upload fallback:', err);
       }
 
-      const punctualityLabel = currentShift.punctualityLabel;
-      const timeStr = currentShift.formattedTimeIST;
-
-      // 2. Perform check-in via service
-      const assignedSiteId = user?.assignedSiteId || (user?.assignedSiteIds && user.assignedSiteIds[0]);
-      if (!assignedSiteId) {
-        Alert.alert('No Site Assigned', 'No substation or site is assigned to your account. Please contact your Operations Administrator to assign a site.');
-        return;
-      }
+      const assignedSiteId = user?.assignedSiteId || user?.assignedSiteIds?.[0] || 'supervisor-general-site';
       const record = await attendanceService.checkIn({
         siteId: assignedSiteId,
         latitude: deviceCoords.latitude,
         longitude: deviceCoords.longitude,
         accuracy: 10,
-        remarks: `Supervisor Normal Check-In (${punctualityLabel})`,
+        photoUrl: uploadedUrl,
+        remarks: 'Supervisor Photo Verified Check-In',
       });
 
-      Alert.alert(
-        'Shift Check-In Successful',
-        `Welcome, ${user?.name || 'Supervisor'}!\n\nCheck-in Time: ${timeStr}\nPunctuality: ${punctualityLabel}\nLocation: Pune - Phase 1 Substation\nSupervisor Privilege: Normal Attendance Approved.`,
-        [{ text: 'Continue to Dashboard', onPress: () => fetchDashboardData() }]
-      );
+      useAttendanceStore.setState({
+        todayStatus: 'active',
+        todayRecord: record,
+      });
+
+      setShowCameraModal(false);
+      setCapturedPhotoUri(null);
+      await fetchDashboardData();
+      Alert.alert('Check-In Successful', 'Welcome! Your attendance and photo verification have been recorded successfully.');
     } catch (err: any) {
       const { getFriendlyErrorMessage } = require('../../services/api');
       Alert.alert('Check-In Failed', getFriendlyErrorMessage(err));
     } finally {
-      setCheckingIn(false);
+      setIsSubmittingPhoto(false);
     }
   };
 
@@ -345,7 +368,9 @@ export const SupervisorDashboardScreen: React.FC = () => {
   const executeSupervisorCheckOut = async () => {
     setCheckingOut(true);
     try {
+      const activeRecordId = todayData?.record?.id || (todayData?.record as any)?._id;
       await attendanceService.checkOut({
+        recordId: activeRecordId,
         latitude: deviceCoords.latitude,
         longitude: deviceCoords.longitude,
         accuracy: 10,
@@ -353,22 +378,46 @@ export const SupervisorDashboardScreen: React.FC = () => {
       });
 
       setShowCheckOutConfirm(false);
+      await fetchDashboardData();
       Alert.alert(
         'Shift Concluded',
         'Shift successfully checked out and archived. Your attendance ledger has been recorded.',
-        [{ text: 'OK', onPress: () => fetchDashboardData() }]
+        [{ text: 'OK' }]
       );
     } catch (err: any) {
       const { getFriendlyErrorMessage } = require('../../services/api');
-      Alert.alert('Check-Out Failed', getFriendlyErrorMessage(err));
+      Alert.alert(
+        'Check-Out Notice',
+        getFriendlyErrorMessage(err) || 'Check-out could not be processed. Please ensure you are checked in and try again.'
+      );
     } finally {
       setCheckingOut(false);
     }
   };
 
   // Helper variables for display
-  const isShiftActive = todayData?.status === 'active' || Boolean(todayData?.record?.checkIn && !todayData?.record?.checkOut);
-  const isShiftCompleted = todayData?.status === 'completed' || Boolean(todayData?.record?.checkIn && todayData?.record?.checkOut);
+  const isRecordForCurrentUser = useMemo(() => {
+    if (!todayData?.record || !user) return false;
+    const userEmpId = (user.employeeId || '').toLowerCase().trim();
+    const userId = (user.id || (user as any)._id || '').toLowerCase().trim();
+    const recEmpId = (todayData.record.employeeId || '').toLowerCase().trim();
+    const recTechCode = ((todayData.record as any).technicianCode || '').toLowerCase().trim();
+    const recUserId = ((todayData.record as any).userId || '').toLowerCase().trim();
+    return (
+      Boolean(userEmpId && (recEmpId === userEmpId || recTechCode === userEmpId || recUserId === userEmpId)) ||
+      Boolean(userId && (recEmpId === userId || recTechCode === userId || recUserId === userId))
+    );
+  }, [todayData?.record, user]);
+
+  const hasRealCheckIn = Boolean(
+    todayData?.record?.checkIn && (todayData.record.checkIn.time || (todayData.record.checkIn as any).timeIST)
+  );
+  const hasRealCheckOut = Boolean(
+    todayData?.record?.checkOut && (todayData.record.checkOut.time || (todayData.record.checkOut as any).timeIST)
+  );
+
+  const isShiftActive = isRecordForCurrentUser && hasRealCheckIn && !hasRealCheckOut;
+  const isShiftCompleted = isRecordForCurrentUser && hasRealCheckIn && hasRealCheckOut;
   const hasShiftStarted = isShiftActive || isShiftCompleted;
 
   const checkInRecord = todayData?.record?.checkIn;
@@ -693,8 +742,6 @@ export const SupervisorDashboardScreen: React.FC = () => {
                   ? `Shift Active • ${shiftStatusText}`
                   : isShiftCompleted
                   ? `Shift Concluded • Out at ${checkOutTimeString}`
-                  : !shiftInfo.isCheckInAllowed
-                  ? 'Check-In Closed • Opens 9:00 AM'
                   : 'Ready to Check In'}
               </Text>
               <Text style={styles.bannerSubtitleText} numberOfLines={2}>
@@ -702,8 +749,6 @@ export const SupervisorDashboardScreen: React.FC = () => {
                   ? 'Active shift in progress • GPS verified'
                   : isShiftCompleted
                   ? `Checked Out at ${checkOutTimeString} • Shift recorded`
-                  : !shiftInfo.isCheckInAllowed
-                  ? shiftInfo.windowMessage
                   : 'GPS verified at current location'}
               </Text>
             </View>
@@ -727,34 +772,8 @@ export const SupervisorDashboardScreen: React.FC = () => {
                   </>
                 )}
               </TouchableOpacity>
-            ) : !shiftInfo.isCheckInAllowed ? (
-              /* DISABLED BUTTON AFTER 6 PM AND BEFORE 9 AM (REOPENS AT 9 AM) */
-              <TouchableOpacity delayPressIn={0}
-                style={[
-                  styles.normalCheckInBtn,
-                  {
-                    backgroundColor: '#E2E8F0',
-                    borderColor: '#CBD5E1',
-                    borderWidth: 1,
-                    opacity: 0.8,
-                  },
-                ]}
-                onPress={() =>
-                  Alert.alert(
-                    'Check-In Closed',
-                    'Shift check-in is closed (06:00 PM – 09:00 AM IST).\n\nCheck-in will reappear and become active at 09:00 AM today.',
-                    [{ text: 'OK' }]
-                  )
-                }
-                activeOpacity={0.7}
-              >
-                <Lock size={15} color="#64748B" style={{ marginRight: 6 }} />
-                <Text style={[styles.normalCheckInBtnText, { color: '#64748B', fontWeight: '700' }]}>
-                  Normal Check In (Opens 9 AM)
-                </Text>
-              </TouchableOpacity>
             ) : (
-              /* ACTIVE CHECK IN BUTTON BETWEEN 09:00 AM AND 06:00 PM */
+              /* ACTIVE CHECK IN BUTTON (UNRESTRICTED OPEN FOR TESTING) */
               <TouchableOpacity delayPressIn={0}
                 style={styles.normalCheckInBtn}
                 onPress={handleNormalCheckIn}
@@ -1221,6 +1240,123 @@ export const SupervisorDashboardScreen: React.FC = () => {
               />
             </View>
           </View>
+        </View>
+      </Modal>
+
+      {/* MANDATORY CAMERA PHOTO VERIFICATION MODAL */}
+      <Modal
+        visible={showCameraModal}
+        animationType="slide"
+        onRequestClose={() => {
+          if (!isSubmittingPhoto) {
+            setShowCameraModal(false);
+            setCapturedPhotoUri(null);
+          }
+        }}
+      >
+        <View style={styles.cameraModalContainer}>
+          {!cameraPermission?.granted ? (
+            <View style={styles.permissionScreen}>
+              <View style={styles.permIconBox}>
+                <CameraIcon size={44} color="#1E63F0" />
+              </View>
+              <Text style={styles.permScreenTitle}>Camera Access Required</Text>
+              <Text style={styles.permScreenSub}>
+                Attendance check-in requires a live camera photo to verify your presence.
+              </Text>
+              <TouchableOpacity style={styles.grantPermBtn} onPress={requestCameraPermission} activeOpacity={0.85}>
+                <CameraIcon size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
+                <Text style={styles.grantPermBtnText}>Enable Camera</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.cancelPermBtn} onPress={() => setShowCameraModal(false)} activeOpacity={0.7}>
+                <Text style={styles.cancelPermBtnText}>Cancel Check-In</Text>
+              </TouchableOpacity>
+            </View>
+          ) : !capturedPhotoUri ? (
+            <View style={StyleSheet.absoluteFill}>
+              <CameraView style={StyleSheet.absoluteFill} facing={cameraFacing} ref={cameraRef}>
+                <View style={[styles.cameraTopOverlay, { paddingTop: Math.max(insets.top, 20) + 10 }]}>
+                  <View style={styles.cameraHeaderWrap}>
+                    <View style={styles.cameraShieldBox}>
+                      <ShieldCheck size={18} color="#FFFFFF" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.cameraHeaderTitle}>MANDATORY SELFIE VERIFICATION</Text>
+                      <Text style={styles.cameraHeaderSub}>Live Camera Attendance Punch</Text>
+                    </View>
+                    <TouchableOpacity style={styles.cameraCloseBtn} onPress={() => setShowCameraModal(false)} activeOpacity={0.7}>
+                      <X size={20} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View style={styles.cameraCenterOverlay}>
+                  <View style={styles.faceTargetRing} />
+                  <View style={styles.faceInstructionBadge}>
+                    <Text style={styles.faceInstructionText}>Align face inside frame • Live Camera Only</Text>
+                  </View>
+                </View>
+
+                <View style={[styles.cameraBottomBar, { paddingBottom: Math.max(insets.bottom, 20) + 16 }]}>
+                  <TouchableOpacity style={styles.cameraSideBtn} onPress={() => setCameraFacing((prev) => (prev === 'front' ? 'back' : 'front'))} activeOpacity={0.75}>
+                    <RotateCcw size={22} color="#FFFFFF" />
+                    <Text style={styles.cameraSideBtnText}>Flip</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity style={styles.shutterRingBtn} onPress={handleCapturePhoto} activeOpacity={0.8}>
+                    <View style={styles.shutterInnerCircle}>
+                      <CameraIcon size={24} color="#1E63F0" />
+                    </View>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity style={styles.cameraSideBtn} onPress={() => setShowCameraModal(false)} activeOpacity={0.75}>
+                    <X size={22} color="#EF4444" />
+                    <Text style={[styles.cameraSideBtnText, { color: '#EF4444' }]}>Cancel</Text>
+                  </TouchableOpacity>
+                </View>
+              </CameraView>
+            </View>
+          ) : (
+            <View style={[styles.previewScreenContainer, { paddingTop: Math.max(insets.top, 20) + 10, paddingBottom: Math.max(insets.bottom, 20) + 16 }]}>
+              <View style={styles.previewHeaderRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.previewTitle}>Review & Submit Photo</Text>
+                  <Text style={styles.previewSubtitle}>Photo captured via live camera • Ready for attendance punch</Text>
+                </View>
+                <TouchableOpacity style={styles.previewCloseBtn} onPress={() => setCapturedPhotoUri(null)} activeOpacity={0.7}>
+                  <X size={20} color="#64748B" />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView contentContainerStyle={styles.previewContentScroll} showsVerticalScrollIndicator={false}>
+                <View style={styles.selfiePreviewWrap}>
+                  <Image source={{ uri: capturedPhotoUri }} style={styles.selfiePreviewImage} resizeMode="cover" />
+                </View>
+
+                <View style={styles.previewDetailsCard}>
+                  <View style={styles.previewDetailRow}>
+                    <Text style={styles.previewDetailLabel}>Verification Mode:</Text>
+                    <Text style={styles.previewDetailVal}>Biometric Live Photo</Text>
+                  </View>
+                  <View style={styles.previewDetailRow}>
+                    <Text style={styles.previewDetailLabel}>Status:</Text>
+                    <Text style={[styles.previewDetailVal, { color: '#059669', fontWeight: '700' }]}>Ready to Check-In</Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity style={styles.submitCheckInBtn} onPress={handleSubmitPhotoAndCheckIn} disabled={isSubmittingPhoto} activeOpacity={0.85}>
+                  {isSubmittingPhoto ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <CheckCircle2 size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
+                      <Text style={styles.submitCheckInBtnText}>Confirm & Complete Check-In</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </ScrollView>
+            </View>
+          )}
         </View>
       </Modal>
 
@@ -2376,6 +2512,261 @@ const styles = StyleSheet.create({
   notifSiteText: {
     fontSize: 11,
     color: '#64748B',
+  },
+
+  cameraModalContainer: {
+    flex: 1,
+    backgroundColor: '#000000',
+  },
+  permissionScreen: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  permIconBox: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#EFF6FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  permScreenTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#0F172A',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  permScreenSub: {
+    fontSize: 14,
+    color: '#64748B',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 30,
+  },
+  grantPermBtn: {
+    flexDirection: 'row',
+    backgroundColor: '#1E63F0',
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginBottom: 12,
+    width: '100%',
+    justifyContent: 'center',
+  },
+  grantPermBtnText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  cancelPermBtn: {
+    paddingVertical: 12,
+    width: '100%',
+    alignItems: 'center',
+  },
+  cancelPermBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  cameraTopOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  cameraHeaderWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  cameraShieldBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cameraHeaderTitle: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 0.8,
+  },
+  cameraHeaderSub: {
+    fontSize: 11,
+    color: '#93C5FD',
+  },
+  cameraCloseBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cameraCenterOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  faceTargetRing: {
+    width: 260,
+    height: 340,
+    borderRadius: 170,
+    borderWidth: 3,
+    borderColor: '#3B82F6',
+    borderStyle: 'dashed',
+    backgroundColor: 'transparent',
+  },
+  faceInstructionBadge: {
+    marginTop: 20,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  faceInstructionText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  cameraBottomBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingTop: 16,
+    paddingHorizontal: 20,
+  },
+  cameraSideBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    width: 60,
+  },
+  cameraSideBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  shutterRingBtn: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+  },
+  shutterInnerCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewScreenContainer: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 16,
+  },
+  previewHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  previewTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  previewSubtitle: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  previewCloseBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#E2E8F0',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewContentScroll: {
+    paddingBottom: 40,
+    gap: 16,
+  },
+  selfiePreviewWrap: {
+    width: '100%',
+    height: 320,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#000000',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  selfiePreviewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  previewDetailsCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 12,
+  },
+  previewDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  previewDetailLabel: {
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  previewDetailVal: {
+    fontSize: 13,
+    color: '#0F172A',
+    fontWeight: '700',
+  },
+  submitCheckInBtn: {
+    flexDirection: 'row',
+    backgroundColor: '#059669',
+    paddingVertical: 16,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#059669',
+    shadowOpacity: 0.25,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  submitCheckInBtnText: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#FFFFFF',
   },
 });
 

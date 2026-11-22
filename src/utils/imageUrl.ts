@@ -14,6 +14,17 @@ export const resolvePhotoUrl = (url?: string | null): string | undefined => {
     return trimmed;
   }
 
+  // 2. Raw base64 string without data prefix (JPEG / PNG magic bytes or long base64 string)
+  if (
+    trimmed.startsWith('/9j/') ||
+    trimmed.startsWith('iVBORw0KGgo') ||
+    trimmed.startsWith('R0lGOD') ||
+    trimmed.startsWith('JVBERi0') ||
+    (trimmed.length > 300 && !trimmed.includes(' ') && !trimmed.includes('/'))
+  ) {
+    return `data:image/jpeg;base64,${trimmed}`;
+  }
+
   const cleanBase = CONFIG.API_BASE_URL.replace(/\/+$/, '');
 
   // 2. Dead Firebase Storage link without download token (403): Fallback to backend /uploads/
