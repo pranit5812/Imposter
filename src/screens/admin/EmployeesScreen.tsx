@@ -37,6 +37,7 @@ import {
   User as UserIcon,
   Briefcase,
   Globe,
+  Mail,
 } from 'lucide-react-native';
 import { Platform, ActivityIndicator } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
@@ -45,6 +46,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
 import { employeeService } from '../../services/employeeService';
 import { siteService } from '../../services/siteService';
+import { sanitizePhoneNumber } from '../../utils/phoneUtils';
 import { User, Substation, UserRole } from '../../types';
 import { COLORS, RADII, SHADOWS } from '../../constants/theme';
 import { EmployeeCard } from '../../components/employee/EmployeeCard';
@@ -60,6 +62,7 @@ const DESIGNATION_OPTIONS = [
   'Senior Smart Meter Technician',
   'Zonal Workforce Supervisor',
   'Lead Meter Inspector',
+  'Division Head',
 ];
 
 const ROLE_OPTIONS: { label: string; value: UserRole }[] = [
@@ -78,6 +81,7 @@ interface ManualBulkEmployee {
   division: string;
   employeeId: string;
   phone: string;
+  email?: string;
   password: string;
 }
 
@@ -89,6 +93,7 @@ const createEmptyBulkRow = (index: number): ManualBulkEmployee => ({
   division: 'North Division',
   employeeId: '',
   phone: '',
+  email: '',
   password: 'Adani@123',
 });
 
@@ -169,13 +174,20 @@ export const EmployeesScreen: React.FC = () => {
         Alert.alert('Missing ID', `Row ${i + 1}: Please enter Employee ID / Number.`);
         return;
       }
-      const cleanPhone = r.phone.trim().replace(/\D/g, '');
-      if (!cleanPhone || cleanPhone.length < 10) {
-        Alert.alert('Invalid Mobile', `Row ${i + 1}: Please enter a valid 10-digit Mobile Number.`);
+      const cleanPhone = sanitizePhoneNumber(r.phone);
+      if (cleanPhone.length !== 10) {
+        Alert.alert('Invalid Mobile', `Row ${i + 1}: Mobile Number must be exactly 10 digits.`);
         return;
       }
-      if (!r.password.trim()) {
-        Alert.alert('Missing Password', `Row ${i + 1}: Please enter Password.`);
+      if (r.email && r.email.trim()) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(r.email.trim())) {
+          Alert.alert('Invalid Email', `Row ${i + 1}: Please enter a valid Email Address.`);
+          return;
+        }
+      }
+      if (!r.password.trim() || r.password.trim().toLowerCase() === 'password') {
+        Alert.alert('Invalid Password', `Row ${i + 1}: Please enter a specific password for this employee (not 'password').`);
         return;
       }
     }
@@ -188,16 +200,20 @@ export const EmployeesScreen: React.FC = () => {
         circle: r.circle.trim() || undefined,
         division: r.division.trim() || undefined,
         employeeId: r.employeeId.trim().toUpperCase(),
-        phone: r.phone.trim(),
+        phone: sanitizePhoneNumber(r.phone),
         password: r.password.trim(),
+        role: r.designation.trim() === 'Division Head' ? 'supervisor' : undefined,
       }));
 
       const res = await employeeService.bulkImportJson(payload, bulkDefaultSiteId || undefined);
       setBulkResult(res);
       fetchEmployees();
     } catch (err: any) {
-      const msg = err.response?.data?.detail || err.message || 'Failed to import employees.';
-      Alert.alert('Import Failed', msg);
+      console.warn('Manual bulk import failed:', err);
+      Alert.alert(
+        'Import Failed',
+        'Unable to complete bulk employee import. Please verify your data and network connection, then try again.'
+      );
     } finally {
       setUploadingBulk(false);
     }
@@ -229,7 +245,7 @@ export const EmployeesScreen: React.FC = () => {
         setBulkResult(null);
       }
     } catch (err: any) {
-      Alert.alert('File Selection Failed', err.message || 'Could not select file.');
+      Alert.alert('File Selection Failed', 'Unable to access selected file. Please select a valid document.');
     }
   };
 
@@ -248,8 +264,11 @@ export const EmployeesScreen: React.FC = () => {
       setBulkResult(res);
       fetchEmployees();
     } catch (err: any) {
-      const msg = err.response?.data?.detail || err.message || 'Failed to upload employees.';
-      Alert.alert('Upload Failed', msg);
+      console.warn('Excel bulk upload failed:', err);
+      Alert.alert(
+        'Upload Failed',
+        'Unable to upload spreadsheet. Please check your network connection and file structure, then try again.'
+      );
     } finally {
       setUploadingBulk(false);
     }
@@ -263,7 +282,8 @@ export const EmployeesScreen: React.FC = () => {
         Alert.alert('Download Started', 'Sample template has been saved to your downloads.');
       }
     } catch (err: any) {
-      Alert.alert('Download Error', err.message || 'Could not download template.');
+      const { getFriendlyErrorMessage } = require('../../services/api');
+      Alert.alert('Download Error', getFriendlyErrorMessage(err));
     } finally {
       setDownloadingTemplate(false);
     }
@@ -290,18 +310,53 @@ export const EmployeesScreen: React.FC = () => {
     } else if (activeFilter === 'Supervisor') {
       result = result.filter((e) => (e.role || '').toLowerCase() === 'supervisor');
     } else if (activeFilter === 'Active') {
-      result = result.filter((e) => (e.status || '').toLowerCase() === 'active');
+      result = result.filter((e) => {
+        const sStatus = (e.shiftStatus || '').toLowerCase();
+        const mainStatus = (e.status || '').toLowerCase();
+        if (sStatus === 'absent' || sStatus === 'not_started' || sStatus === 'off' || mainStatus === 'inactive') return false;
+        return (
+          sStatus === 'present' ||
+          sStatus === 'checked in' ||
+          sStatus === 'checked_in' ||
+          sStatus === 'on-time' ||
+          sStatus === 'late' ||
+          sStatus === 'half day' ||
+          sStatus === 'half_day' ||
+          sStatus === 'completed' ||
+          Boolean((e as any).checkInTime || (e as any).checkIn)
+        );
+      });
     }
     if (search.trim()) {
       const s = search.trim().toLowerCase();
-      result = result.filter(
-        (e) =>
-          (e.name || '').toLowerCase().includes(s) ||
-          (e.employeeId || '').toLowerCase().includes(s) ||
-          (e.phone || '').toLowerCase().includes(s) ||
-          (e.designation || '').toLowerCase().includes(s) ||
-          (e.assignedSiteName || '').toLowerCase().includes(s)
-      );
+      const cleanPhoneSearch = s.replace(/\D/g, '');
+      result = result.filter((e) => {
+        const name = (e.name || '').toLowerCase();
+        const empId = (e.employeeId || '').toLowerCase();
+        const rawPhone = (e.phone || '').toLowerCase();
+        const cleanPhone = rawPhone.replace(/\D/g, '');
+        const email = (e.email || '').toLowerCase();
+        const desig = (e.designation || '').toLowerCase();
+        const circle = (e.circle || '').toLowerCase();
+        const division = (e.division || '').toLowerCase();
+        const role = (e.role || '').toLowerCase();
+        const siteName = (e.assignedSiteName || '').toLowerCase();
+        const shift = (e.shiftStatus || '').toLowerCase();
+
+        return (
+          name.includes(s) ||
+          empId.includes(s) ||
+          rawPhone.includes(s) ||
+          (cleanPhoneSearch.length > 0 && cleanPhone.includes(cleanPhoneSearch)) ||
+          email.includes(s) ||
+          desig.includes(s) ||
+          circle.includes(s) ||
+          division.includes(s) ||
+          role.includes(s) ||
+          siteName.includes(s) ||
+          shift.includes(s)
+        );
+      });
     }
     return result;
   }, [employees, activeFilter, search]);
@@ -316,7 +371,7 @@ export const EmployeesScreen: React.FC = () => {
         employeeService.getEmployees(),
         siteService.getSites(forceRefresh).catch(() => siteService.getCachedSites()),
       ]);
-      if (data && data.length > 0) {
+      if (data && Array.isArray(data)) {
         setEmployees(data);
       }
       if (siteList && siteList.length > 0) {
@@ -351,10 +406,10 @@ export const EmployeesScreen: React.FC = () => {
     setRole('technician');
     setCircle('');
     setDivision('');
-    setAssignedSiteIds(sites.length > 0 ? [sites[0].id] : []);
-    setLatitude(sites[0] ? String(sites[0].latitude) : '');
-    setLongitude(sites[0] ? String(sites[0].longitude) : '');
-    setLocationName(sites[0]?.address || sites[0]?.name || '');
+    setAssignedSiteIds([]);
+    setLatitude('');
+    setLongitude('');
+    setLocationName('');
     setShiftStatus('Present');
     setShowModal(true);
   };
@@ -456,12 +511,37 @@ export const EmployeesScreen: React.FC = () => {
       Alert.alert('Required Fields', 'Please complete Employee ID, Full Name, and Phone Number.');
       return;
     }
+
+    const cleanPhone = sanitizePhoneNumber(phone);
+    if (cleanPhone.length !== 10) {
+      Alert.alert('Invalid Mobile Number', 'Mobile Number must be exactly 10 digits.');
+      return;
+    }
+
+    if (email.trim()) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email.trim())) {
+        Alert.alert('Invalid Email Address', 'Please enter a valid email address (e.g. user@example.com).');
+        return;
+      }
+    }
+
+    const trimmedId = employeeId.trim().toLowerCase();
+    const isDuplicate = employees.some(emp =>
+      emp.employeeId?.toLowerCase() === trimmedId && emp.id !== editingEmp?.id && (emp as any)._id !== editingEmp?.id
+    );
+
+    if (!editingEmp && (!password.trim() || password.trim().toLowerCase() === 'password')) {
+      Alert.alert('Invalid Password', 'Please assign a specific, secure password for this employee (not "password").');
+      return;
+    }
+
     setSaving(true);
     try {
       const payload: Partial<User> = {
         name: name.trim(),
         employeeId: employeeId.trim(),
-        phone: phone.trim(),
+        phone: cleanPhone,
         email: email.trim() || undefined,
         role,
         designation,
@@ -474,6 +554,10 @@ export const EmployeesScreen: React.FC = () => {
         locationName: locationName.trim() || undefined,
         shiftStatus,
       };
+
+      if (password.trim()) {
+        (payload as any).password = password.trim();
+      }
 
       if (editingEmp) {
         await employeeService.updateEmployee(editingEmp.id, payload);
@@ -488,7 +572,8 @@ export const EmployeesScreen: React.FC = () => {
       setShowModal(false);
       fetchEmployees();
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to save employee record');
+      const { getFriendlyErrorMessage } = require('../../services/api');
+      Alert.alert('Error', getFriendlyErrorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -501,11 +586,22 @@ export const EmployeesScreen: React.FC = () => {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
+          const targetId = emp.id || (emp as any)._id || emp.employeeId;
           try {
-            await employeeService.deleteEmployee(emp.id);
+            await employeeService.deleteEmployee(targetId);
+            setEmployees((prev) =>
+              prev.filter(
+                (item) =>
+                  item.id !== targetId &&
+                  (item as any)._id !== targetId &&
+                  item.employeeId !== targetId &&
+                  item.employeeId !== emp.employeeId
+              )
+            );
             fetchEmployees();
           } catch (err: any) {
-            Alert.alert('Error', err.message);
+            const { getFriendlyErrorMessage } = require('../../services/api');
+            Alert.alert('Error', getFriendlyErrorMessage(err));
           }
         },
       },
@@ -794,197 +890,6 @@ export const EmployeesScreen: React.FC = () => {
                 </View>
               </View>
 
-              {/* SECTION: Assigned Substations & Sites */}
-              <View style={styles.sectionHeaderRow}>
-                <Text style={styles.sectionHeading}>
-                  Assigned Substations & Sites ({assignedSiteIds.length} selected)
-                </Text>
-                <Text style={styles.sectionSubHeading}>Select one or more substations assigned to this employee</Text>
-              </View>
-
-              {/* Selected Sites Pills with ✕ button */}
-              <View style={styles.selectedPillsRow}>
-                {assignedSiteIds.map((siteId) => {
-                  const s = sitesMap[siteId];
-                  if (!s) return null;
-                  return (
-                    <View key={siteId} style={styles.selectedPill}>
-                      <Building2 size={12} color="#2563EB" />
-                      <Text style={styles.selectedPillText}>{s.name}</Text>
-                      <TouchableOpacity delayPressIn={0}
-                        onPress={() => removeSiteAssignment(siteId)}
-                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                      >
-                        <X size={12} color="#2563EB" />
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })}
-              </View>
-
-              {/* 2-Column Selectable Substation Cards Grid */}
-              <View style={styles.sitesGrid}>
-                {sites.map((site) => {
-                  const isAssigned = assignedSiteIds.includes(site.id);
-                  return (
-                    <TouchableOpacity delayPressIn={0}
-                      key={site.id}
-                      style={[styles.siteCard, isAssigned && styles.siteCardAssigned]}
-                      onPress={() => toggleSiteAssignment(site.id)}
-                      activeOpacity={0.8}
-                    >
-                      <View style={styles.siteCardTop}>
-                        {/* Checkbox */}
-                        <View style={[styles.checkboxBox, isAssigned && styles.checkboxBoxActive]}>
-                          {isAssigned && <Check size={11} color="#FFFFFF" strokeWidth={3} />}
-                        </View>
-                        {/* Assigned Badge */}
-                        {isAssigned && (
-                          <View style={styles.assignedBadge}>
-                            <Text style={styles.assignedBadgeText}>Assigned</Text>
-                          </View>
-                        )}
-                      </View>
-
-                      {/* Name & Code */}
-                      <Text style={styles.siteCardTitle} numberOfLines={1}>
-                        {site.name}
-                      </Text>
-                      <Text style={styles.siteCardCode}>{site.code}</Text>
-
-                      {/* Coordinates Pill */}
-                      <View style={styles.siteCardCoords}>
-                        <MapPin size={9} color="#16A34A" />
-                        <Text style={styles.siteCardCoordsText}>
-                          {site.latitude.toFixed(3)}, {site.longitude.toFixed(3)}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              {/* SECTION: Specified Location Coordinates (Lat / Long) */}
-              <View style={styles.coordsSectionCard}>
-                <View style={styles.coordsHeaderRow}>
-                  <View style={styles.coordsTitleCol}>
-                    <View style={styles.coordsIconBadge}>
-                      <MapPin size={16} color="#2563EB" />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.coordsHeading}>
-                        Specified Location Coordinates (Lat / Long)
-                      </Text>
-                      <Text style={styles.coordsSubHeading}>
-                        Geofenced baseline for mobile attendance & tracking
-                      </Text>
-                    </View>
-                  </View>
-
-                  {/* Action Buttons: Sync Site Coords, My GPS, Map Pin */}
-                  <View style={styles.coordsActionsRow}>
-                    <TouchableOpacity delayPressIn={0}
-                      style={styles.coordActionBtn}
-                      onPress={handleSyncSiteCoords}
-                      activeOpacity={0.7}
-                    >
-                      <Building2 size={12} color="#2563EB" />
-                      <Text style={styles.coordActionBtnText}>Sync Site Coords</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity delayPressIn={0}
-                      style={styles.coordActionBtn}
-                      onPress={handleGetMyGPS}
-                      activeOpacity={0.7}
-                    >
-                      <Navigation size={12} color="#2563EB" />
-                      <Text style={styles.coordActionBtnText}>My GPS</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity delayPressIn={0}
-                      style={styles.coordActionBtn}
-                      onPress={handleSyncSiteCoords}
-                      activeOpacity={0.7}
-                    >
-                      <MapPin size={12} color="#2563EB" />
-                      <Text style={styles.coordActionBtnText}>Map Pin</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                {/* 2-Column Lat / Long Inputs */}
-                <View style={[styles.formRow, { marginTop: 12 }]}>
-                  <View style={styles.formCol}>
-                    <Text style={styles.fieldLabel}>Latitude</Text>
-                    <TextInput
-                      style={styles.inputBox}
-                      value={latitude}
-                      onChangeText={setLatitude}
-                      keyboardType="numeric"
-                      placeholder="e.g. 18.852362"
-                      placeholderTextColor="#94A3B8"
-                    />
-                  </View>
-                  <View style={styles.formCol}>
-                    <Text style={styles.fieldLabel}>Longitude</Text>
-                    <TextInput
-                      style={styles.inputBox}
-                      value={longitude}
-                      onChangeText={setLongitude}
-                      keyboardType="numeric"
-                      placeholder="e.g. 73.884358"
-                      placeholderTextColor="#94A3B8"
-                    />
-                  </View>
-                </View>
-
-                {/* Specified Location Landmark Input */}
-                <Text style={styles.fieldLabel}>Specified Location Name / Landmark (Optional)</Text>
-                <TextInput
-                  style={[styles.inputBox, { marginBottom: 12 }]}
-                  value={locationName}
-                  onChangeText={setLocationName}
-                  placeholder="e.g. Area, Grid, Substation Address"
-                  placeholderTextColor="#94A3B8"
-                />
-
-                {/* Save Coordinates to Primary Site Button */}
-                <View style={styles.saveToSiteRow}>
-                  <TouchableOpacity delayPressIn={0}
-                    style={styles.saveToSiteBtn}
-                    onPress={handleSaveCoordsToSite}
-                    activeOpacity={0.8}
-                  >
-                    <Building2 size={13} color="#2563EB" />
-                    <Text style={styles.saveToSiteBtnText}>
-                      Save Coordinates to "{primarySite?.name || 'Selected Site'}"
-                    </Text>
-                  </TouchableOpacity>
-                  <Text style={styles.saveToSiteHelpText}>Updates site profile permanently</Text>
-                </View>
-
-                {/* Tagged GPS Status & View on Google Maps Link */}
-                <View style={styles.taggedGpsRow}>
-                  <View style={styles.taggedGpsCol}>
-                    <View style={styles.greenGpsDot} />
-                    <Text style={styles.taggedGpsText}>
-                      Tagged GPS: {parseFloat(latitude || '0').toFixed(6)},{' '}
-                      {parseFloat(longitude || '0').toFixed(6)}
-                    </Text>
-                  </View>
-
-                  <TouchableOpacity delayPressIn={0}
-                    style={styles.viewMapsLink}
-                    onPress={handleOpenGoogleMaps}
-                    activeOpacity={0.7}
-                  >
-                    <MapPin size={12} color="#2563EB" />
-                    <Text style={styles.viewMapsLinkText}>View on Google Maps</Text>
-                    <ExternalLink size={10} color="#2563EB" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-
               {/* SECTION: Shift Status */}
               <View style={{ marginBottom: 14 }}>
                 <Text style={styles.fieldLabel}>Shift Status</Text>
@@ -997,6 +902,103 @@ export const EmployeesScreen: React.FC = () => {
                   <ChevronDown size={14} color="#64748B" />
                 </TouchableOpacity>
               </View>
+
+              {/* Transfer to Supervisor / Role Transfer Card (Only when editing an employee) */}
+              {editingEmp && (
+                <View style={styles.transferCard}>
+                  <Text style={styles.transferCardTitle}>Role Transfer & Promotion</Text>
+                  <Text style={styles.transferCardSub}>
+                    Easily transfer this user between Field Technician, Supervisor, and Admin roles.
+                  </Text>
+                  {role !== 'supervisor' ? (
+                    <TouchableOpacity delayPressIn={0}
+                      style={styles.transferSupervisorBtn}
+                      onPress={() => {
+                        setRole('supervisor');
+                        Alert.alert('Role Updated', `Role changed to Supervisor. Tap "Save Changes" to complete transfer.`);
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <ShieldCheck size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
+                      <Text style={styles.transferSupervisorBtnText}>Transfer User to Supervisor Role</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity delayPressIn={0}
+                      style={styles.transferTechBtn}
+                      onPress={() => {
+                        setRole('technician');
+                        Alert.alert('Role Updated', `Role changed to Field Technician. Tap "Save Changes" to complete transfer.`);
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <UserIcon size={14} color="#0369A1" style={{ marginRight: 6 }} />
+                      <Text style={styles.transferTechBtnText}>Transfer User to Field Technician Role</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+
+              {/* SECTION: Assigned Substations & Sites */}
+              <View style={{ marginTop: 10 }}>
+                <View style={styles.sectionHeaderRow}>
+                  <Text style={styles.sectionHeading}>
+                    Assigned Substations & Sites
+                  </Text>
+                    <Text style={styles.sectionSubHeading}>
+                      Select one or more substations assigned to this employee
+                    </Text>
+                  </View>
+
+                  {/* Selected Sites Pills with ✕ button */}
+                  <View style={styles.selectedPillsRow}>
+                    {assignedSiteIds.map((siteId) => {
+                      const s = sitesMap[siteId];
+                      if (!s) return null;
+                      return (
+                        <View key={siteId} style={styles.selectedPill}>
+                          <Building2 size={12} color="#2563EB" />
+                          <Text style={styles.selectedPillText}>{s.name}</Text>
+                          <TouchableOpacity delayPressIn={0}
+                            onPress={() => removeSiteAssignment(siteId)}
+                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          >
+                            <X size={12} color="#2563EB" />
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })}
+                  </View>
+
+                  {/* 2-Column Selectable Substation Cards Grid */}
+                  <View style={styles.sitesGrid}>
+                    {sites.map((site) => {
+                      const isAssigned = assignedSiteIds.includes(site.id);
+                      return (
+                        <TouchableOpacity delayPressIn={0}
+                          key={site.id}
+                          style={[styles.siteCard, isAssigned && styles.siteCardAssigned]}
+                          onPress={() => toggleSiteAssignment(site.id)}
+                          activeOpacity={0.8}
+                        >
+                          <View style={styles.siteCardTop}>
+                            <View style={[styles.checkboxBox, isAssigned && styles.checkboxBoxActive]}>
+                              {isAssigned && <Check size={11} color="#FFFFFF" strokeWidth={3} />}
+                            </View>
+                            {isAssigned && (
+                              <View style={styles.assignedBadge}>
+                                <Text style={styles.assignedBadgeText}>Assigned</Text>
+                              </View>
+                            )}
+                          </View>
+                          <Text style={styles.siteCardTitle} numberOfLines={1}>
+                            {site.name}
+                          </Text>
+                          <Text style={styles.siteCardCode}>{site.code}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
             </ScrollView>
 
             {/* Modal Bottom Actions: Cancel & Save Changes */}
@@ -1049,6 +1051,9 @@ export const EmployeesScreen: React.FC = () => {
                   style={[styles.pickerOption, designation === item && styles.pickerOptionActive]}
                   onPress={() => {
                     setDesignation(item);
+                    if (item === 'Division Head') {
+                      setRole('supervisor');
+                    }
                     setPickerType(null);
                   }}
                 >
@@ -1530,6 +1535,10 @@ export const EmployeesScreen: React.FC = () => {
                             <Text style={styles.columnPillText}>Mobile Number</Text>
                           </View>
                           <View style={styles.columnPill}>
+                            <Mail size={12} color="#0369A1" style={{ marginRight: 4 }} />
+                            <Text style={styles.columnPillText}>Email ID</Text>
+                          </View>
+                          <View style={styles.columnPill}>
                             <KeyRound size={12} color="#0369A1" style={{ marginRight: 4 }} />
                             <Text style={styles.columnPillText}>Password</Text>
                           </View>
@@ -1990,6 +1999,57 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '700',
     color: '#16A34A',
+  },
+
+  // Role Transfer Card
+  transferCard: {
+    backgroundColor: '#F0F9FF',
+    borderWidth: 1,
+    borderColor: '#BAE6FD',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+  },
+  transferCardTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0369A1',
+    marginBottom: 2,
+  },
+  transferCardSub: {
+    fontSize: 11,
+    color: '#0284C7',
+    marginBottom: 10,
+  },
+  transferSupervisorBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0284C7',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+  transferSupervisorBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  transferTechBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#E0F2FE',
+    borderWidth: 1,
+    borderColor: '#7DD3FC',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+  transferTechBtnText: {
+    color: '#0369A1',
+    fontSize: 12,
+    fontWeight: '700',
   },
 
   // Specified Location Coordinates Section Card

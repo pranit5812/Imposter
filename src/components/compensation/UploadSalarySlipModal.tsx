@@ -89,7 +89,7 @@ export const UploadSalarySlipModal: React.FC<UploadSalarySlipModalProps> = ({
       }
       setMonth(initialMonth);
       setYear(initialYear);
-      setNetAmount('28000');
+      setNetAmount('');
       setNotes('Monthly verified technician salary payout');
       setPickedFile(null);
       setPickerModal(null);
@@ -115,7 +115,7 @@ export const UploadSalarySlipModal: React.FC<UploadSalarySlipModalProps> = ({
         const file = result.assets[0];
         let base64Data: string | undefined = undefined;
 
-        let cleanName = file.name || `Adani_Salary_Slip_${selectedEmpId}_${month}_${year}.pdf`;
+        let cleanName = file.name || `Salary_Slip_${selectedEmpId}_${month}_${year}.pdf`;
         if (!cleanName.toLowerCase().endsWith('.pdf')) {
           cleanName = cleanName.replace(/\.[^/.]+$/, '') + '.pdf';
           if (!cleanName.toLowerCase().endsWith('.pdf')) {
@@ -215,12 +215,17 @@ export const UploadSalarySlipModal: React.FC<UploadSalarySlipModalProps> = ({
       return;
     }
 
+    if (!pickedFile) {
+      Alert.alert('PDF Document Required', 'Please select and attach a salary slip PDF document before saving.');
+      return;
+    }
+
     setSaving(true);
     try {
       const targetEmpId =
         selectedEmployee.employeeId || selectedEmployee.id || (selectedEmployee as any)._id;
 
-      let targetFileName = pickedFile?.name || `Adani_Salary_Slip_${targetEmpId}_${month}_${year}.pdf`;
+      let targetFileName = pickedFile.name;
       if (!targetFileName.toLowerCase().endsWith('.pdf')) {
         targetFileName = targetFileName.replace(/\.[^/.]+$/, '') + '.pdf';
       }
@@ -232,7 +237,7 @@ export const UploadSalarySlipModal: React.FC<UploadSalarySlipModalProps> = ({
         netAmount: numAmount,
         notes: notes.trim(),
         fileName: targetFileName,
-        fileBase64: pickedFile?.base64,
+        fileBase64: pickedFile.base64,
       });
 
       Alert.alert(

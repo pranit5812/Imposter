@@ -47,6 +47,7 @@ import { attendanceService, TodayAttendanceResult } from '../../services/attenda
 import { dashboardService, AdminNotification } from '../../services/dashboardService';
 import { SupervisorDrawerModal } from '../../components/navigation/SupervisorDrawerModal';
 import { AttendanceRecord, Substation } from '../../types';
+import { formatTimeIST } from '../../utils/shiftUtils';
 import { AppButton } from '../../components/common/AppButton';
 import { ConfirmationModal } from '../../components/common/ConfirmationModal';
 import { holidayService } from '../../services/holidayService';
@@ -309,7 +310,11 @@ export const SupervisorDashboardScreen: React.FC = () => {
       const timeStr = currentShift.formattedTimeIST;
 
       // 2. Perform check-in via service
-      const assignedSiteId = user?.assignedSiteId || 'site_pune_01';
+      const assignedSiteId = user?.assignedSiteId || (user?.assignedSiteIds && user.assignedSiteIds[0]);
+      if (!assignedSiteId) {
+        Alert.alert('No Site Assigned', 'No substation or site is assigned to your account. Please contact your Operations Administrator to assign a site.');
+        return;
+      }
       const record = await attendanceService.checkIn({
         siteId: assignedSiteId,
         latitude: deviceCoords.latitude,
@@ -324,10 +329,8 @@ export const SupervisorDashboardScreen: React.FC = () => {
         [{ text: 'Continue to Dashboard', onPress: () => fetchDashboardData() }]
       );
     } catch (err: any) {
-      Alert.alert(
-        'Check-In Failed',
-        err.response?.data?.detail || err.message || 'Unable to record check-in. Please try again.'
-      );
+      const { getFriendlyErrorMessage } = require('../../services/api');
+      Alert.alert('Check-In Failed', getFriendlyErrorMessage(err));
     } finally {
       setCheckingIn(false);
     }
@@ -356,18 +359,16 @@ export const SupervisorDashboardScreen: React.FC = () => {
         [{ text: 'OK', onPress: () => fetchDashboardData() }]
       );
     } catch (err: any) {
-      Alert.alert(
-        'Check-Out Failed',
-        err.response?.data?.detail || err.message || 'Failed to complete check-out.'
-      );
+      const { getFriendlyErrorMessage } = require('../../services/api');
+      Alert.alert('Check-Out Failed', getFriendlyErrorMessage(err));
     } finally {
       setCheckingOut(false);
     }
   };
 
   // Helper variables for display
-  const isShiftActive = todayData?.status === 'active';
-  const isShiftCompleted = todayData?.status === 'completed';
+  const isShiftActive = todayData?.status === 'active' || Boolean(todayData?.record?.checkIn && !todayData?.record?.checkOut);
+  const isShiftCompleted = todayData?.status === 'completed' || Boolean(todayData?.record?.checkIn && todayData?.record?.checkOut);
   const hasShiftStarted = isShiftActive || isShiftCompleted;
 
   const checkInRecord = todayData?.record?.checkIn;
@@ -380,6 +381,16 @@ export const SupervisorDashboardScreen: React.FC = () => {
       return '--:--';
     }
   }, [checkInRecord]);
+
+  const checkOutTimeString = useMemo(() => {
+    const rawTime = todayData?.record?.checkOut?.time || (todayData?.record as any)?.checkOutTime;
+    if (!rawTime) return '--:--';
+    try {
+      return (todayData?.record?.checkOut as any)?.timeIST || formatTimeIST(rawTime);
+    } catch {
+      return '--:--';
+    }
+  }, [todayData]);
 
   const checkInDateString = useMemo(() => {
     if (!todayData?.record?.date) return new Date().toISOString().split('T')[0];
@@ -418,16 +429,33 @@ export const SupervisorDashboardScreen: React.FC = () => {
       .toUpperCase();
   }, [user]);
 
-  // Weekly review bar data matching user screenshot 2
-  const weeklyBars = [
-    { day: 'Wed 21', hours: 10.2, target: 8.0 },
-    { day: 'Thu 22', hours: 6.8, target: 8.0 },
-    { day: 'Fri 23', hours: 7.0, target: 8.0 },
-    { day: 'Sat 24', hours: 8.0, target: 8.0 },
-    { day: 'Sun 25', hours: 0.0, target: 8.0 },
-    { day: 'Mon 26', hours: 8.2, target: 8.0 },
-    { day: 'Tue 27', hours: hasShiftStarted ? 8.1 : 0.0, target: 8.0, isToday: true },
-  ];
+  const liveHoursToday = useMemo(() => {
+    if (todayData?.status === 'active') {
+      return Number((liveElapsedMinutes / 60).toFixed(1));
+    }
+    if (todayData?.status === 'completed' && todayData?.record?.workingMinutes) {
+      return Number((todayData.record.workingMinutes / 60).toFixed(1));
+    }
+    return 0.0;
+  }, [todayData, liveElapsedMinutes]);
+
+  const weeklyBars = useMemo(() => {
+    const list = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const isToday = i === 0;
+      const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
+      const dayNum = d.getDate();
+      list.push({
+        day: `${dayName} ${dayNum}`,
+        hours: isToday ? liveHoursToday : 0.0,
+        target: 8.0,
+        isToday,
+      });
+    }
+    return list;
+  }, [liveHoursToday]);
 
   return (
     <View style={[styles.screen, { paddingTop: Math.max(insets.top, 12) }]}>
@@ -462,33 +490,21 @@ export const SupervisorDashboardScreen: React.FC = () => {
             </View>
 
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              {/* Notification Button */}
+              {/* Notification Bell Icon */}
               <TouchableOpacity delayPressIn={0}
-                style={[styles.headerPillBtn, styles.notifPillBtn]}
+                style={styles.bellCardBtn}
                 onPress={() => setShowNotifModal(true)}
-                activeOpacity={0.7}
+                activeOpacity={0.8}
                 accessibilityLabel="Supervisor Notifications"
               >
-                <Bell size={13} color="#1E63F0" />
-                <Text style={[styles.headerPillBtnText, { color: '#1E63F0', fontWeight: '700' }]}>
-                  Alerts
-                </Text>
+                <Bell size={20} color="#1E293B" />
                 {unreadCount > 0 && (
-                  <View style={styles.notifBadgeDot}>
-                    <Text style={styles.notifBadgeText}>{unreadCount}</Text>
+                  <View style={styles.bellBadge}>
+                    <Text style={styles.bellBadgeText}>
+                      {unreadCount > 9 ? '9+' : String(unreadCount)}
+                    </Text>
                   </View>
                 )}
-              </TouchableOpacity>
-
-              {/* Logout Button */}
-              <TouchableOpacity delayPressIn={0}
-                style={[styles.headerPillBtn, styles.logoutPillBtn]}
-                onPress={handleLogout}
-                activeOpacity={0.7}
-                accessibilityLabel="Sign Out of Supervisor Portal"
-              >
-                <LogOut size={13} color="#DC2626" />
-                <Text style={styles.logoutPillBtnText}>Logout</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -525,7 +541,8 @@ export const SupervisorDashboardScreen: React.FC = () => {
                 try {
                   await holidayService.downloadHolidaysPdf(2026);
                 } catch (e: any) {
-                  Alert.alert('Holiday Calendar', e.message || 'Unable to download holiday calendar.');
+      const { getFriendlyErrorMessage } = require('../../services/api');
+      Alert.alert('Holiday Calendar', getFriendlyErrorMessage(e));
                 }
               }}
               activeOpacity={0.7}
@@ -653,8 +670,8 @@ export const SupervisorDashboardScreen: React.FC = () => {
                 <TrendingUp size={15} color="#EC4899" />
               </View>
             </View>
-            <Text style={styles.kpiMainValue}>83%</Text>
-            <Text style={styles.kpiSubText}>5 Shifts Logged</Text>
+            <Text style={styles.kpiMainValue}>{Math.round(((hasShiftStarted ? 1 : 0) / Math.max(1, new Date().getDate())) * 100)}%</Text>
+            <Text style={styles.kpiSubText}>{(hasShiftStarted ? 1 : 0)} {(hasShiftStarted ? 1 : 0) === 1 ? 'Shift' : 'Shifts'} Logged</Text>
           </View>
         </View>
 
@@ -675,19 +692,19 @@ export const SupervisorDashboardScreen: React.FC = () => {
                 {isShiftActive
                   ? `Shift Active • ${shiftStatusText}`
                   : isShiftCompleted
-                  ? `Shift Concluded • ${shiftStatusText}`
+                  ? `Shift Concluded • Out at ${checkOutTimeString}`
                   : !shiftInfo.isCheckInAllowed
-                  ? (shiftInfo.isAfterShiftEnd
-                      ? 'Shift Closed • Reopens 9:00 AM'
-                      : 'Check-In Closed • Opens 9:00 AM')
+                  ? 'Check-In Closed • Opens 9:00 AM'
                   : 'Ready to Check In'}
               </Text>
               <Text style={styles.bannerSubtitleText} numberOfLines={2}>
                 {isShiftActive
-                  ? 'Active shift in progress • GPS verified at assigned site'
+                  ? 'Active shift in progress • GPS verified'
+                  : isShiftCompleted
+                  ? `Checked Out at ${checkOutTimeString} • Shift recorded`
                   : !shiftInfo.isCheckInAllowed
                   ? shiftInfo.windowMessage
-                  : 'GPS verified at your current device location'}
+                  : 'GPS verified at current location'}
               </Text>
             </View>
           </View>
@@ -725,9 +742,7 @@ export const SupervisorDashboardScreen: React.FC = () => {
                 onPress={() =>
                   Alert.alert(
                     'Check-In Closed',
-                    shiftInfo.isAfterShiftEnd
-                      ? 'Shift check-in closed at 06:00 PM IST.\n\nCheck-in is disabled and will reappear at 09:00 AM tomorrow.'
-                      : 'Shift check-in is closed (06:00 PM – 09:00 AM IST).\n\nCheck-in will reappear and become active at 09:00 AM today.',
+                    'Shift check-in is closed (06:00 PM – 09:00 AM IST).\n\nCheck-in will reappear and become active at 09:00 AM today.',
                     [{ text: 'OK' }]
                   )
                 }
@@ -735,7 +750,7 @@ export const SupervisorDashboardScreen: React.FC = () => {
               >
                 <Lock size={15} color="#64748B" style={{ marginRight: 6 }} />
                 <Text style={[styles.normalCheckInBtnText, { color: '#64748B', fontWeight: '700' }]}>
-                  {shiftInfo.isAfterShiftEnd ? 'Normal Check In (Closed)' : 'Normal Check In (Opens 9 AM)'}
+                  Normal Check In (Opens 9 AM)
                 </Text>
               </TouchableOpacity>
             ) : (
@@ -882,183 +897,147 @@ export const SupervisorDashboardScreen: React.FC = () => {
         </View>
 
         {/* ============================================================== */}
-        {/* SECTION 5: MY ATTENDANCE REVIEW & WORK HOURS (IMAGE 2)         */}
+        {/* SECTION 5: MY ATTENDANCE REVIEW & WORK HOURS                   */}
         {/* ============================================================== */}
         <View style={styles.analyticsCard}>
-          <View style={styles.cardHeaderRow}>
-            <View style={styles.cardIconBox}>
-              <BarChart3 size={18} color="#1E63F0" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <View style={styles.cardTitleWrap}>
-                <Text style={styles.cardTitle}>My Attendance Review & Work Hours</Text>
-                <View style={styles.analyticsPill}>
-                  <Text style={styles.analyticsPillText}>EMPLOYEE ANALYTICS</Text>
-                </View>
+            <View style={styles.cardHeaderRow}>
+              <View style={styles.cardIconBox}>
+                <BarChart3 size={18} color="#1E63F0" />
               </View>
-              <Text style={styles.cardSubTitle}>
-                Visual shift review, hours worked history & punctuality compliance
-              </Text>
-            </View>
-
-            <View style={styles.analyticsHeaderActions}>
-              <View style={styles.segmentToggle}>
-                <TouchableOpacity delayPressIn={0}
-                  style={[styles.segmentBtn, chartMode === 'daily' && styles.segmentBtnActive]}
-                  onPress={() => setChartMode('daily')}
-                >
-                  <Text
-                    style={[
-                      styles.segmentBtnText,
-                      chartMode === 'daily' && styles.segmentBtnTextActive,
-                    ]}
-                  >
-                    Daily Hours Trend
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity delayPressIn={0}
-                  style={[styles.segmentBtn, chartMode === 'distribution' && styles.segmentBtnActive]}
-                  onPress={() => setChartMode('distribution')}
-                >
-                  <Text
-                    style={[
-                      styles.segmentBtnText,
-                      chartMode === 'distribution' && styles.segmentBtnTextActive,
-                    ]}
-                  >
-                    Shift Distribution
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              <TouchableOpacity delayPressIn={0}
-                style={styles.fullLogsBtn}
-                onPress={() => navigation.navigate('AttendanceLogs')}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.fullLogsBtnText}>→ Full Logs</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* 4 Analytics Summary Stat Cells */}
-          <View style={styles.summaryStatsRow}>
-            <View style={styles.summaryStatCell}>
-              <Text style={styles.summaryStatLabel}>WEEK TOTAL HOURS</Text>
-              <Text style={styles.summaryStatValue}>
-                55.1 <Text style={styles.summaryStatUnit}>hrs</Text>
-              </Text>
-              <Text style={styles.summaryStatSub}>Target: 40h standard week</Text>
-            </View>
-
-            <View style={styles.summaryStatCell}>
-              <Text style={styles.summaryStatLabel}>DAILY AVERAGE</Text>
-              <Text style={styles.summaryStatValue}>
-                11.0 <Text style={styles.summaryStatUnit}>hrs/day</Text>
-              </Text>
-              <Text style={styles.summaryStatSub}>Optimal field efficiency</Text>
-            </View>
-
-            <View style={styles.summaryStatCell}>
-              <Text style={styles.summaryStatLabel}>PRESENT SHIFTS</Text>
-              <Text style={styles.summaryStatValue}>
-                5 <Text style={styles.summaryStatUnit}>/ 6 Days</Text>
-              </Text>
-              <Text style={styles.summaryStatSub}>Attendance: 83%</Text>
-            </View>
-
-            <View style={styles.summaryStatCell}>
-              <Text style={styles.summaryStatLabel}>GEOFENCE COMPLIANCE</Text>
-              <Text style={[styles.summaryStatValue, { color: '#10B981' }]}>100%</Text>
-              <Text style={styles.summaryStatSub}>100% In-Range Verified</Text>
-            </View>
-          </View>
-
-          {/* Visual Bar Chart (Matching Image 2) */}
-          <View style={styles.chartWrapper}>
-            {/* Chart Legend */}
-            <View style={styles.chartLegendRow}>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: '#10B981' }]} />
-                <Text style={styles.legendText}>
-                  Hours Worked per Day (Target line: 8.0 hrs)
-                </Text>
-              </View>
-
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: '#2563EB' }]} />
-                <Text style={styles.legendText}>Today's Live Shift</Text>
-              </View>
-            </View>
-
-            {/* Bars Area with Y-axis & Target line */}
-            <View style={styles.chartArea}>
-              {/* Y-Axis Labels */}
-              <View style={styles.yAxisCol}>
-                <Text style={styles.yAxisLabel}>10h</Text>
-                <Text style={styles.yAxisLabel}>6h</Text>
-                <Text style={styles.yAxisLabel}>2h</Text>
-              </View>
-
-              {/* Chart Grid & Bars */}
-              <View style={styles.barsContainer}>
-                {/* 8h Target Horizontal Line */}
-                <View style={styles.targetDashedLine}>
-                  <View style={styles.targetTag}>
-                    <Text style={styles.targetTagText}>8h Target Shift</Text>
+              <View style={{ flex: 1 }}>
+                <View style={styles.cardTitleWrap}>
+                  <Text style={styles.cardTitle}>My Attendance Review & Work Hours</Text>
+                  <View style={styles.analyticsPill}>
+                    <Text style={styles.analyticsPillText}>EMPLOYEE ANALYTICS</Text>
                   </View>
                 </View>
+              </View>
 
-                {/* Bars */}
-                <View style={styles.barsRow}>
-                  {weeklyBars.map((bar, idx) => {
-                    const maxH = 140;
-                    const barHeight = Math.max(8, (bar.hours / 12) * maxH);
-                    const parts = bar.day.trim().split(/\s+/);
-                    const dayName = parts[0] || '';
-                    const dayDate = parts[1] || '';
+              <View style={styles.analyticsHeaderActions}>
+                <View style={styles.segmentToggle}>
+                  <TouchableOpacity delayPressIn={0}
+                    style={[styles.segmentBtn, chartMode === 'daily' && styles.segmentBtnActive]}
+                    onPress={() => setChartMode('daily')}
+                  >
+                    <Text
+                      style={[
+                        styles.segmentBtnText,
+                        chartMode === 'daily' && styles.segmentBtnTextActive,
+                      ]}
+                    >
+                      Daily Hours Trend
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity delayPressIn={0}
+                    style={[styles.segmentBtn, chartMode === 'distribution' && styles.segmentBtnActive]}
+                    onPress={() => setChartMode('distribution')}
+                  >
+                    <Text
+                      style={[
+                        styles.segmentBtnText,
+                        chartMode === 'distribution' && styles.segmentBtnTextActive,
+                      ]}
+                    >
+                      Shift Distribution
+                    </Text>
+                  </TouchableOpacity>
+                </View>
 
-                    return (
-                      <View key={idx} style={styles.barCol}>
-                        <View style={styles.barTrack}>
-                          {bar.hours > 0 ? (
-                            <View
-                              style={[
-                                styles.barFill,
-                                { height: barHeight },
-                                bar.isToday && styles.barFillToday,
-                              ]}
-                            />
-                          ) : (
-                            <View style={styles.barEmptyPill} />
-                          )}
-                        </View>
-                        <View style={styles.barDayWrap}>
-                          <Text
-                            style={[
-                              styles.barDayText,
-                              bar.isToday && styles.barDayTextToday,
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {dayName}
-                          </Text>
-                          {dayDate ? (
+                <TouchableOpacity delayPressIn={0}
+                  style={styles.fullLogsBtn}
+                  onPress={() => navigation.navigate('AttendanceLogs')}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.fullLogsBtnText}>→ Full Logs</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Visual Bar Chart */}
+            <View style={styles.chartWrapper}>
+              {/* Chart Legend */}
+              <View style={styles.chartLegendRow}>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: '#10B981' }]} />
+                  <Text style={styles.legendText}>
+                    Hours Worked per Day (Target line: 8.0 hrs)
+                  </Text>
+                </View>
+
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: '#2563EB' }]} />
+                  <Text style={styles.legendText}>Today's Live Shift</Text>
+                </View>
+              </View>
+
+              {/* Bars Area with Y-axis & Target line */}
+              <View style={styles.chartArea}>
+                {/* Y-Axis Labels */}
+                <View style={styles.yAxisCol}>
+                  <Text style={styles.yAxisLabel}>10h</Text>
+                  <Text style={styles.yAxisLabel}>6h</Text>
+                  <Text style={styles.yAxisLabel}>2h</Text>
+                </View>
+
+                {/* Chart Grid & Bars */}
+                <View style={styles.barsContainer}>
+                  {/* 8h Target Horizontal Line */}
+                  <View style={styles.targetDashedLine}>
+                    <View style={styles.targetTag}>
+                      <Text style={styles.targetTagText}>8h Target Shift</Text>
+                    </View>
+                  </View>
+
+                  {/* Bars */}
+                  <View style={styles.barsRow}>
+                    {weeklyBars.map((bar, idx) => {
+                      const maxH = 140;
+                      const barHeight = Math.max(8, (bar.hours / 12) * maxH);
+                      const parts = bar.day.trim().split(/\s+/);
+                      const dayName = parts[0] || '';
+                      const dayDate = parts[1] || '';
+
+                      return (
+                        <View key={idx} style={styles.barCol}>
+                          <View style={styles.barTrack}>
+                            {bar.hours > 0 ? (
+                              <View
+                                style={[
+                                  styles.barFill,
+                                  { height: barHeight },
+                                  bar.isToday && styles.barFillToday,
+                                ]}
+                              />
+                            ) : (
+                              <View style={styles.barEmptyPill} />
+                            )}
+                          </View>
+                          <View style={styles.barDayWrap}>
                             <Text
                               style={[
-                                styles.barDateText,
-                                bar.isToday && styles.barDateTextToday,
+                                styles.barDayText,
+                                bar.isToday && styles.barDayTextToday,
                               ]}
                               numberOfLines={1}
                             >
-                              {dayDate}
+                              {dayName}
                             </Text>
-                          ) : null}
+                            {dayDate ? (
+                              <Text
+                                style={[
+                                  styles.barDateText,
+                                  bar.isToday && styles.barDateTextToday,
+                                ]}
+                                numberOfLines={1}
+                              >
+                                {dayDate}
+                              </Text>
+                            ) : null}
+                          </View>
                         </View>
-                      </View>
-                    );
-                  })}
-                </View>
+                      );
+                    })}
+                  </View>
               </View>
             </View>
           </View>
@@ -1219,9 +1198,6 @@ export const SupervisorDashboardScreen: React.FC = () => {
 
                       {/* Sender Info Footer */}
                       <View style={styles.notifFooterRow}>
-                        {item.avatar ? (
-                          <Image source={{ uri: item.avatar }} style={styles.notifSenderAvatar} />
-                        ) : null}
                         <Text style={styles.notifSenderName}>
                           {item.sender || (isAdmin ? 'Central Admin Operations' : item.employeeName || 'Technician')}
                         </Text>
@@ -2121,6 +2097,41 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     fontWeight: '700',
     color: '#DC2626',
+  },
+  bellCardBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.2,
+    borderColor: '#E2E8F0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  bellBadge: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    backgroundColor: '#E11D48',
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    paddingHorizontal: 5,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  bellBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '900',
   },
 
   // Supervisor Notifications Modal Styles

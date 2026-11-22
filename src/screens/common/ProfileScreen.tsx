@@ -211,7 +211,7 @@ export const ProfileScreen: React.FC = () => {
               <Text style={styles.infoVal}>
                 {isAdmin
                   ? 'Enterprise Multi-Site Command'
-                  : user?.assignedSiteId || (user?.assignedSiteIds && user.assignedSiteIds.length > 0 ? `${user.assignedSiteIds.length} Assigned Sites` : 'All Zonal Sites')}
+                  : user?.assignedSiteId || (user?.assignedSiteIds && user.assignedSiteIds.length > 0 ? 'Assigned Sites' : 'All Zonal Sites')}
               </Text>
             </View>
           </View>

@@ -46,6 +46,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuthStore } from '../../store/useAuthStore';
 import { resolvePhotoUrl } from '../../utils/imageUrl';
 import { getStorageItem, setStorageItem } from '../../services/api';
+import { employeeService } from '../../services/employeeService';
 import {
   dashboardService,
   AdminStats,
@@ -59,6 +60,7 @@ import { StatusBadge } from '../../components/common/StatusBadge';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { AppButton } from '../../components/common/AppButton';
 import { useAdminDrawerStore } from '../../store/useAdminDrawerStore';
+import { User } from '../../types';
 import { AdminDrawerModal } from '../../components/navigation/AdminDrawerModal';
 
 interface AdminDashboardScreenProps {
@@ -70,10 +72,9 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
   const { openDrawer } = useAdminDrawerStore();
   const { user, logout } = useAuthStore();
   const [stats, setStats] = useState<AdminStats | null>(null);
+  const [employeesList, setEmployeesList] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-
-
 
   // Notifications state (modal opens only when clicking bell icon)
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
@@ -123,8 +124,12 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
 
   const fetchStats = async () => {
     try {
-      const data = await dashboardService.getAdminStats();
-      setStats(data);
+      const [data, emps] = await Promise.all([
+        dashboardService.getAdminStats().catch(() => null),
+        employeeService.getEmployees().catch(() => []),
+      ]);
+      if (data) setStats(data);
+      if (emps && Array.isArray(emps)) setEmployeesList(emps);
     } catch (e) {
       console.warn('Dashboard stats error:', e);
     } finally {
@@ -172,8 +177,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
     } catch (_) {}
   };
 
-
-
   useEffect(() => {
     fetchStats();
   }, []);
@@ -198,18 +201,40 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
     return notifications.filter((n: AdminNotification) => !n.isRead).length;
   }, [notifications, markedAllRead]);
 
-  if (loading && !stats) {
-    return <LoadingSpinner message="Aggregating workforce telemetry..." />;
-  }
+  const kpi = useMemo(() => {
+    if (stats?.kpi && stats.kpi.totalFieldStaff > 0) {
+      return stats.kpi;
+    }
+    const total = employeesList.length;
+    const active = employeesList.filter((e) => (e.status || '').toLowerCase() !== 'inactive').length;
+    return {
+      totalFieldStaff: total,
+      currentlyPresent: active,
+      absentOffDuty: Math.max(0, total - active),
+      completedShift: 0,
+    };
+  }, [stats?.kpi, employeesList]);
 
-  const kpi = stats?.kpi || {
-    totalFieldStaff: 28,
-    currentlyPresent: 23,
-    absentOffDuty: 3,
-    completedShift: 2,
-  };
+  const recentAttendance = useMemo((): RecentAttendanceItem[] => {
+    if (stats?.recentAttendance && stats.recentAttendance.length > 0) {
+      return stats.recentAttendance;
+    }
+    return employeesList.map((emp) => ({
+      id: emp.id || emp.employeeId,
+      employeeId: emp.employeeId || 'EMP',
+      employeeName: emp.name || 'Technician',
+      designation: emp.designation || (emp.role === 'supervisor' ? 'Zonal Workforce Supervisor' : 'Field Technician'),
+      siteName: emp.circle ? `${emp.circle} Circle` : emp.division ? `${emp.division} Division` : 'Central Operations',
+      checkInTime: '--:--',
+      checkOutTime: '--:--',
+      duration: '--',
+      status: (emp.status || '').toLowerCase() === 'inactive' ? 'absent' : (emp.shiftStatus && emp.shiftStatus.toLowerCase() !== 'present' ? emp.shiftStatus.toLowerCase() : 'absent'),
+      isInsideGeofence: true,
+      distanceMeters: 10,
+      distanceTraveled: '0.0 km',
+    }));
+  }, [stats?.recentAttendance, employeesList]);
 
-  const recentAttendance = stats?.recentAttendance || [];
   const filteredAttendance = recentAttendance.filter((rec) => {
     if (attendanceFilter === 'present') return rec.status === 'present' || rec.status === 'completed';
     if (attendanceFilter === 'late') return rec.status === 'late';
@@ -220,14 +245,14 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
   });
 
   const distribution = stats?.statusDistribution || {
-    presentOnTime: 18,
-    presentLate: 3,
-    completedShift: 2,
-    absent: 3,
-    totalTracked: 26,
-    complianceRate: 92.3,
-    punctualityRate: 85.7,
-    percentages: { onTime: 69, late: 12, completed: 8, absent: 11 },
+    presentOnTime: 0,
+    presentLate: 0,
+    completedShift: 0,
+    absent: 0,
+    totalTracked: 0,
+    complianceRate: 0,
+    punctualityRate: 0,
+    percentages: { onTime: 0, late: 0, completed: 0, absent: 0 },
   };
 
   const filteredNotifications = notifications.filter((item: AdminNotification) => {
@@ -235,6 +260,55 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
     if (notifFilter === 'geofence') return item.type === 'danger' || item.category.toLowerCase().includes('geofence');
     return true;
   });
+
+  // Dynamic LIVE Weekly Attendance & Punctuality Analytics
+  const computedWeeklyTrend = useMemo(() => {
+    const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const now = new Date();
+    const list = [];
+    const totalEmployees = Math.max(1, employeesList.length);
+
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(now.getDate() - i);
+      const dayLabel = dayNames[(d.getDay() + 6) % 7];
+
+      if (i === 0) {
+        let onTimeCount = 0;
+        let lateCount = 0;
+
+        recentAttendance.forEach((rec) => {
+          const st = (rec.status || '').toLowerCase();
+          if (st === 'present' || st === 'completed' || st === 'on-time' || st === 'on_time') {
+            onTimeCount++;
+          } else if (st === 'late' || st === 'half_day' || st === 'half-day') {
+            lateCount++;
+          }
+        });
+
+        const calculatedAbsent = Math.max(0, totalEmployees - (onTimeCount + lateCount));
+        const totalPresent = onTimeCount + lateCount;
+        const rate = Math.round((totalPresent / totalEmployees) * 100);
+
+        list.push({
+          day: dayLabel,
+          present: totalPresent,
+          late: lateCount,
+          absent: calculatedAbsent,
+          attendanceRate: rate,
+        });
+      } else {
+        list.push({
+          day: dayLabel,
+          present: 0,
+          late: 0,
+          absent: totalEmployees,
+          attendanceRate: 0,
+        });
+      }
+    }
+    return list;
+  }, [recentAttendance, employeesList]);
 
   // Status Distribution Pie metrics: Present, Pending, Checked Out
   const presentCount = kpi.currentlyPresent || 0;
@@ -523,7 +597,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
 
           {/* Interactive Stacked Multi-Metric Bar Chart */}
           <View style={styles.barChartContainer}>
-            {(stats?.weeklyTrend || []).map((item, idx) => {
+            {computedWeeklyTrend.map((item, idx) => {
               const onTime = item.present - item.late;
               const late = item.late;
               const absent = item.absent;
@@ -596,34 +670,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
               <View style={[styles.legendBox, { backgroundColor: '#FCA5A5' }]} />
               <Text style={styles.legendText}>Absent</Text>
             </View>
-          </View>
-
-          {/* Hourly Punctuality Arrival Curve Breakdown */}
-          <View style={styles.hourlyDivider} />
-          <Text style={styles.hourlySectionTitle}>TODAY'S HOURLY ARRIVAL TIMELINE</Text>
-          <View style={styles.hourlyGrid}>
-            {(stats?.hourlyArrivals || []).map((slot, i) => (
-              <View key={i} style={styles.hourlySlotCard}>
-                <View style={styles.hourlySlotHeader}>
-                  <Text style={styles.hourlySlotTime}>{slot.slot}</Text>
-                  <View style={[styles.hourlyBadge, { backgroundColor: slot.color + '20' }]}>
-                    <Text style={[styles.hourlyBadgeText, { color: slot.color }]}>{slot.label}</Text>
-                  </View>
-                </View>
-                <View style={styles.hourlySlotCountRow}>
-                  <Text style={styles.hourlyCountText}>{slot.count} staff</Text>
-                  <Text style={styles.hourlyRateText}>{slot.rate}</Text>
-                </View>
-                <View style={styles.hourlyProgressTrack}>
-                  <View
-                    style={[
-                      styles.hourlyProgressFill,
-                      { width: slot.rate, backgroundColor: slot.color },
-                    ]}
-                  />
-                </View>
-              </View>
-            ))}
           </View>
         </AppCard>
 
@@ -1238,7 +1284,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
                       </View>
 
                       <View style={styles.notifBodyRow}>
-                        <Image source={{ uri: item.avatar }} style={styles.notifAvatar} />
                         <View style={styles.notifContentCol}>
                           <Text style={styles.notifTitleText}>{item.title}</Text>
                           <Text style={styles.notifMessageText}>{item.message}</Text>

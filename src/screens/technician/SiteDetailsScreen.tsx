@@ -454,7 +454,7 @@ export const SiteDetailsScreen: React.FC<SiteDetailsScreenProps> = ({ route, nav
       {assignedSites.length > 1 && (
         <View style={styles.siteSwitcherSection}>
           <Text style={styles.siteSwitcherHeader}>
-            YOUR ASSIGNED SITES ({assignedSites.length})
+            YOUR ASSIGNED SITES
           </Text>
           <ScrollView
             horizontal

@@ -161,7 +161,7 @@ export const CompensationScreen: React.FC = () => {
         let base64Data: string | undefined = undefined;
 
         // Ensure filename always cleanly ends with .pdf
-        let cleanName = file.name || `Adani_Salary_Slip_${selectedEmpId}_${selectedMonth}_${selectedYear}.pdf`;
+        let cleanName = file.name || `Salary_Slip_${selectedEmpId}_${selectedMonth}_${selectedYear}.pdf`;
         if (!cleanName.toLowerCase().endsWith('.pdf')) {
           cleanName = cleanName.replace(/\.[^/.]+$/, '') + '.pdf';
           if (!cleanName.toLowerCase().endsWith('.pdf')) {
@@ -270,6 +270,11 @@ export const CompensationScreen: React.FC = () => {
       return;
     }
 
+    if (!pickedFile) {
+      Alert.alert('PDF Document Required', 'Please attach a salary slip PDF document before uploading.');
+      return;
+    }
+
     setUploading(true);
     setUploadSuccessMsg(null);
 
@@ -278,7 +283,7 @@ export const CompensationScreen: React.FC = () => {
       selectedEmployee.id ||
       (selectedEmployee as any)._id;
 
-    let targetFileName = pickedFile?.name || `Adani_Salary_Slip_${empId}_${selectedMonth}_${selectedYear}.pdf`;
+    let targetFileName = pickedFile.name;
     if (!targetFileName.toLowerCase().endsWith('.pdf')) {
       targetFileName = targetFileName.replace(/\.[^/.]+$/, '') + '.pdf';
     }
@@ -291,7 +296,7 @@ export const CompensationScreen: React.FC = () => {
         netAmount: parseFloat(netAmount) || 20000,
         notes: notes.trim() || `Verified salary slip for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}`,
         fileName: targetFileName,
-        fileBase64: pickedFile?.base64,
+        fileBase64: pickedFile.base64,
       });
 
       const successText = `Salary slip for ${selectedEmployee.name} (${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}) uploaded successfully as an official PDF! It is now retrievable by the employee and supervisor.`;
@@ -316,7 +321,7 @@ export const CompensationScreen: React.FC = () => {
     try {
       const token = useAuthStore.getState().token;
       const rawFileName =
-        slip.fileName || `Adani_Salary_Slip_${empId}_${selectedMonth}_${selectedYear}.pdf`;
+        slip.fileName || `Salary_Slip_${empId}_${selectedMonth}_${selectedYear}.pdf`;
       const filename = rawFileName.replace(/[^a-zA-Z0-9._-]/g, '_');
 
       if (Platform.OS === 'web') {

@@ -4,6 +4,8 @@ import * as Sharing from 'expo-sharing';
 import { apiClient, getStoredToken } from './api';
 import { User } from '../types';
 
+import { sanitizePhoneNumber } from '../utils/phoneUtils';
+
 export interface EmployeeFilters {
   search?: string;
   role?: string;
@@ -47,21 +49,27 @@ let cachedEmployeesList: User[] = [];
 
 export const employeeService = {
   getCachedEmployees(): User[] {
-    return cachedEmployeesList;
+    return cachedEmployeesList;co
   },
 
   async getEmployees(filters?: EmployeeFilters): Promise<User[]> {
     try {
       const response = await apiClient.get<User[]>('/employees', { params: filters });
-      if (response.data && Array.isArray(response.data) && response.data.length > 0) {
-        // If query was unfiltered, cache entire master list
+      if (response.data && Array.isArray(response.data)) {
+        const cleaned = response.data.map((emp) => ({
+          ...emp,
+          phone: sanitizePhoneNumber(emp.phone),
+        })).sort((a, b) => {
+          return (a.employeeId || '').localeCompare(b.employeeId || '', undefined, { numeric: true, sensitivity: 'base' });
+        });
         if (!filters || (!filters.role && !filters.search && !filters.status)) {
-          cachedEmployeesList = response.data;
+          cachedEmployeesList = cleaned;
         } else if (cachedEmployeesList.length === 0) {
-          cachedEmployeesList = response.data;
+          cachedEmployeesList = cleaned;
         }
+        return cleaned;
       }
-      return response.data;
+      return response.data || [];
     } catch (err) {
       if (cachedEmployeesList.length > 0) {
         console.warn('Network error fetching employees, serving cached list of', cachedEmployeesList.length);
@@ -89,20 +97,33 @@ export const employeeService = {
 
   async getEmployeeById(employeeId: string): Promise<User> {
     const response = await apiClient.get<User>(`/employees/${encodeURIComponent(employeeId)}`);
+    if (response.data && response.data.phone) {
+      response.data.phone = sanitizePhoneNumber(response.data.phone);
+    }
     return response.data;
   },
 
   async createEmployee(data: Partial<User> & { password: string }): Promise<User> {
-    const response = await apiClient.post<User>('/employees', data);
+    const payload = {
+      ...data,
+      phone: sanitizePhoneNumber(data.phone),
+    };
+    const response = await apiClient.post<User>('/employees', payload);
     if (response.data) {
+      if (response.data.phone) response.data.phone = sanitizePhoneNumber(response.data.phone);
       cachedEmployeesList = [response.data, ...cachedEmployeesList];
     }
     return response.data;
   },
 
   async updateEmployee(employeeId: string, data: Partial<User>): Promise<User> {
-    const response = await apiClient.put<User>(`/employees/${encodeURIComponent(employeeId)}`, data);
+    const payload = {
+      ...data,
+      phone: data.phone ? sanitizePhoneNumber(data.phone) : undefined,
+    };
+    const response = await apiClient.put<User>(`/employees/${encodeURIComponent(employeeId)}`, payload);
     if (response.data) {
+      if (response.data.phone) response.data.phone = sanitizePhoneNumber(response.data.phone);
       cachedEmployeesList = cachedEmployeesList.map((e) =>
         e.id === response.data.id || e.employeeId === response.data.employeeId ? response.data : e
       );
@@ -112,8 +133,12 @@ export const employeeService = {
 
   async deleteEmployee(employeeId: string): Promise<void> {
     await apiClient.delete(`/employees/${encodeURIComponent(employeeId)}`);
+    const cleanId = String(employeeId).toLowerCase();
     cachedEmployeesList = cachedEmployeesList.filter(
-      (e) => e.id !== employeeId && e.employeeId !== employeeId
+      (e) =>
+        String(e.id || '').toLowerCase() !== cleanId &&
+        String((e as any)._id || '').toLowerCase() !== cleanId &&
+        String(e.employeeId || '').toLowerCase() !== cleanId
     );
   },
 
@@ -149,8 +174,16 @@ export const employeeService = {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      timeout: 60000,
       transformRequest: (data) => data, // Preserve native FormData on web & native
     });
+
+    if (response.data && Array.isArray(response.data.employees)) {
+      response.data.employees = response.data.employees.map((e) => ({
+        ...e,
+        phone: sanitizePhoneNumber(e.phone),
+      }));
+    }
 
     return response.data;
   },
@@ -162,9 +195,22 @@ export const employeeService = {
     items: BulkEmployeeItem[],
     defaultSiteId?: string
   ): Promise<BulkUploadResponse> {
-    const response = await apiClient.post<BulkUploadResponse>('/employees/bulk-import-json', items, {
+    const sanitizedItems = items.map((item) => ({
+      ...item,
+      phone: sanitizePhoneNumber(item.phone),
+    }));
+    const response = await apiClient.post<BulkUploadResponse>('/employees/bulk-import-json', sanitizedItems, {
       params: defaultSiteId ? { defaultSiteId } : undefined,
+      timeout: 60000,
     });
+
+    if (response.data && Array.isArray(response.data.employees)) {
+      response.data.employees = response.data.employees.map((e) => ({
+        ...e,
+        phone: sanitizePhoneNumber(e.phone),
+      }));
+    }
+
     return response.data;
   },
 

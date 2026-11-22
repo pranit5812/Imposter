@@ -88,9 +88,8 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
   }, [todayRecord, user]);
 
   const isAlreadyCheckedIn = useMemo(() => {
-    if (!isRecordForCurrentUser) return false;
     return todayStatus === 'active' || todayStatus === 'completed' || Boolean(todayRecord?.checkIn);
-  }, [isRecordForCurrentUser, todayStatus, todayRecord]);
+  }, [todayStatus, todayRecord]);
 
   // Substation List
   const [sites, setSites] = useState<Substation[]>([]);
@@ -101,8 +100,19 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
   const checkedInSiteId = todayRecord?.siteId;
 
   const displayedSites = useMemo(() => {
-    return sites;
-  }, [sites]);
+    if (!user) return sites;
+    const assignedIds = [...(user.assignedSiteIds || [])];
+    if (user.assignedSiteId && !assignedIds.includes(user.assignedSiteId)) {
+      assignedIds.push(user.assignedSiteId);
+    }
+
+    if (assignedIds.length > 0) {
+      return sites.filter(site => assignedIds.includes(site.id) || assignedIds.includes((site as any)._id));
+    }
+
+    // Do NOT auto-assign sites if none are explicitly assigned to user
+    return [];
+  }, [sites, user]);
 
   // GPS & Real Device Location State
   const [gpsLoading, setGpsLoading] = useState(false);
@@ -177,7 +187,7 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
             return validSites.find((s) => s.id === prev.id) || prev;
           }
           const matchPrimary = primaryId ? validSites.find((s) => s.id === primaryId) : null;
-          return matchPrimary || validSites[0];
+          return matchPrimary || null;
         });
       } else {
         setSelectedSite(null);
@@ -611,7 +621,8 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
         setCapturedPhotoUri(photoData);
         triggerHaptic('success');
       } catch (e: any) {
-        Alert.alert('Camera Error', e.message || 'Failed to capture photo.');
+        const { getFriendlyErrorMessage } = require('../../services/api');
+        Alert.alert('Camera Error', getFriendlyErrorMessage(e));
       }
     }
   };
@@ -664,13 +675,18 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
         console.warn('Photo upload fallback to captured URI:', err);
       }
 
-      await attendanceService.checkIn({
+      const record = await attendanceService.checkIn({
         siteId: selectedSite?.id || '',
         latitude,
         longitude,
         accuracy,
         photoUrl: uploadedUrl,
         remarks: `Field Technician Shift Check-In (${distanceFormatted} from ${selectedSite?.name || 'Assigned Site'})`,
+      });
+
+      useAttendanceStore.setState({
+        todayStatus: 'active',
+        todayRecord: record,
       });
 
       await fetchTodayAttendance();
@@ -689,9 +705,10 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
         ]
       );
     } catch (err: any) {
+      const { getFriendlyErrorMessage } = require('../../services/api');
       Alert.alert(
         'Check-In Notice',
-        err.response?.data?.detail || err.message || 'Unable to record check-in. Please try again.'
+        getFriendlyErrorMessage(err)
       );
     } finally {
       setIsSubmitting(false);
@@ -761,7 +778,7 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
               <Building2 size={18} color="#FFFFFF" />
             </View>
             <Text style={styles.substationSelectorTitle}>
-              {`Assigned Substations (${sites.length})`}
+              Assigned Substations
             </Text>
             <View style={[styles.selectPunchPill, isAlreadyCheckedIn && { backgroundColor: '#DCFCE7' }]}>
               <Text style={[styles.selectPunchPillText, isAlreadyCheckedIn && { color: '#15803D' }]}>
@@ -1044,18 +1061,6 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
                     />
                   )}
 
-                  {/* Nearby Real Places Markers */}
-                  {nearbyPlaces.map((np, idx) => (
-                    <Marker
-                      key={`nearby-${np.id || idx}`}
-                      coordinate={{ latitude: np.latitude, longitude: np.longitude }}
-                      title={np.name}
-                      description={`${np.category_label || ''} • ${np.formatted_distance || ''}`}
-                      pinColor={np.category_color || '#2563EB'}
-                      zIndex={6}
-                    />
-                  ))}
-
                   {/* Connecting Route Line between Device Location & Site Location */}
                   {latitude !== 0 && longitude !== 0 && (
                     <Polyline
@@ -1165,113 +1170,7 @@ export const CheckInScreen: React.FC<{ navigation: any; route?: any }> = ({ navi
               </TouchableOpacity>
             </View>
 
-            {/* Real Maharashtra Nearby Places & Business Search Section */}
-            <View style={styles.placesContainer}>
-              <View style={styles.placesHeader}>
-                <View style={styles.placesHeaderTitleRow}>
-                  <MapPin size={15} color="#1E40AF" style={{ marginRight: 6 }} />
-                  <Text style={styles.placesTitle}>Nearby Places & Local Businesses</Text>
-                </View>
-                {loadingPlaces && <ActivityIndicator size="small" color="#1E40AF" />}
-              </View>
 
-              {/* Search Bar */}
-              <View style={styles.searchBarBox}>
-                <Search size={14} color="#64748B" style={{ marginRight: 8 }} />
-                <TextInput
-                  style={styles.searchBarInput}
-                  placeholder="Search shops, landmarks, roads..."
-                  placeholderTextColor="#94A3B8"
-                  value={nearbyQuery}
-                  onChangeText={setNearbyQuery}
-                  onSubmitEditing={() => fetchNearby(nearbyCategory, nearbyQuery)}
-                  returnKeyType="search"
-                />
-                {nearbyQuery.length > 0 && (
-                  <TouchableOpacity
-                    onPress={() => {
-                      setNearbyQuery('');
-                      fetchNearby(nearbyCategory, '');
-                    }}
-                    style={{ padding: 4 }}
-                  >
-                    <X size={14} color="#94A3B8" />
-                  </TouchableOpacity>
-                )}
-              </View>
-
-              {/* Category Filter Chips */}
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryChipsScroll}>
-                {[
-                  { id: 'all', label: 'All', icon: '📍' },
-                  { id: 'fuel', label: 'Petrol & EV', icon: '⛽' },
-                  { id: 'healthcare', label: 'Hospitals', icon: '🏥' },
-                  { id: 'financial', label: 'Banks & ATMs', icon: '🏧' },
-                  { id: 'food', label: 'Food & Cafes', icon: '🍴' },
-                  { id: 'shop', label: 'Shops & Marts', icon: '🛒' },
-                  { id: 'transit', label: 'Stations', icon: '🚉' },
-                ].map((cat) => {
-                  const isActive = nearbyCategory === cat.id;
-                  return (
-                    <TouchableOpacity
-                      key={cat.id}
-                      style={[styles.categoryChip, isActive && styles.categoryChipActive]}
-                      onPress={() => {
-                        setNearbyCategory(cat.id);
-                        fetchNearby(cat.id);
-                      }}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.categoryChipIcon}>{cat.icon}</Text>
-                      <Text style={[styles.categoryChipText, isActive && styles.categoryChipTextActive]}>
-                        {cat.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-
-              {/* Horizontal List of Nearby Places Cards */}
-              {nearbyPlaces.length > 0 && (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.placesListScroll}>
-                  {nearbyPlaces.map((place) => (
-                    <TouchableOpacity
-                      key={place.id}
-                      style={styles.placeCard}
-                      onPress={() => {
-                        if (mapRef.current) {
-                          mapRef.current.animateToRegion({
-                            latitude: place.latitude,
-                            longitude: place.longitude,
-                            latitudeDelta: 0.005,
-                            longitudeDelta: 0.005,
-                          }, 400);
-                        }
-                      }}
-                      activeOpacity={0.8}
-                    >
-                      <View style={styles.placeCardHeader}>
-                        <View style={[styles.placeCategoryDot, { backgroundColor: place.category_color || '#2563EB' }]} />
-                        <Text style={styles.placeCategoryText}>{place.category_label || place.category}</Text>
-                        <Text style={styles.placeDistanceText}>{place.formatted_distance}</Text>
-                      </View>
-                      <Text style={styles.placeNameText} numberOfLines={1}>{place.name}</Text>
-                      <Text style={styles.placeAddressText} numberOfLines={1}>{place.road || place.city || place.address}</Text>
-                      <TouchableOpacity
-                        style={styles.placeDirectionsBtn}
-                        onPress={() => {
-                          const url = `https://www.google.com/maps/dir/?api=1&destination=${place.latitude},${place.longitude}`;
-                          Linking.openURL(url);
-                        }}
-                      >
-                        <Navigation size={10} color="#1E40AF" style={{ marginRight: 4 }} />
-                        <Text style={styles.placeDirectionsBtnText}>Directions</Text>
-                      </TouchableOpacity>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              )}
-            </View>
 
             {/* 3 Telemetry Metrics below Map */}
             <View style={styles.telemetryGrid}>

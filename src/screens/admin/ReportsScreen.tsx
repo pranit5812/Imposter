@@ -272,7 +272,10 @@ Synchronized across all dashboards and muster reports.`,
       setSites(siteList);
 
       if (musterRes && musterRes.records) {
-        setMusterRecords(musterRes.records);
+        const sortedRecords = [...musterRes.records].sort((a, b) => {
+          return (a.employeeCode || '').localeCompare(b.employeeCode || '', undefined, { numeric: true, sensitivity: 'base' });
+        });
+        setMusterRecords(sortedRecords);
         setDaysMeta(musterRes.days || []);
         setMonthName(musterRes.monthName || `${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}`);
         if (musterRes.stats) {
@@ -309,7 +312,10 @@ Synchronized across all dashboards and muster reports.`,
     try {
       const musterRes = await reportService.getMusterRoll(selectedMonth, selectedYear, selectedSiteFilter);
       if (musterRes && musterRes.records) {
-        setMusterRecords(musterRes.records);
+        const sortedRecords = [...musterRes.records].sort((a, b) => {
+          return (a.employeeCode || '').localeCompare(b.employeeCode || '', undefined, { numeric: true, sensitivity: 'base' });
+        });
+        setMusterRecords(sortedRecords);
         setDaysMeta(musterRes.days || []);
         setMonthName(musterRes.monthName);
         if (musterRes.stats) {

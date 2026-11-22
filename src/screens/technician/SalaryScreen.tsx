@@ -103,7 +103,7 @@ export const SalaryScreen: React.FC = () => {
       const targetEmpId = slip?.employeeId || user?.employeeId || currentUserId;
       const rawFileName =
         slip?.fileName ||
-        `Adani_Salary_Slip_${targetEmpId}_${selectedMonth}_${selectedYear}.pdf`;
+        `Salary_Slip_${MONTH_NAMES[selectedMonth - 1]}_${selectedYear}.pdf`;
       let filename = rawFileName.replace(/[^a-zA-Z0-9._-]/g, '_');
       if (!filename.toLowerCase().endsWith('.pdf')) {
         filename = filename.replace(/\.[^/.]+$/, '') + '.pdf';
@@ -177,13 +177,13 @@ export const SalaryScreen: React.FC = () => {
 
   let rawDocName =
     slip?.fileName ||
-    `Adani_Salary_Slip_${MONTH_NAMES[selectedMonth - 1]}_${selectedYear}.pdf`;
+    `Salary_Slip_${MONTH_NAMES[selectedMonth - 1]}_${selectedYear}.pdf`;
   if (!rawDocName.toLowerCase().endsWith('.pdf')) {
     rawDocName = rawDocName.replace(/\.[^/.]+$/, '') + '.pdf';
   }
   const documentName = rawDocName;
 
-  const isDocumentAvailable = Boolean(slip?.hasUploadedDocument || slip?.fileName || slip?.documentUrl || slip?.payslipPdfUrl);
+  const isDocumentAvailable = Boolean(slip?.hasUploadedDocument && slip?.fileName);
 
   return (
     <View style={styles.container}>
@@ -377,9 +377,9 @@ export const SalaryScreen: React.FC = () => {
             <View style={styles.emptyIconCircle}>
               <FileText size={36} color="#94A3B8" />
             </View>
-            <Text style={styles.emptyTitle}>No Salary Slip Uploaded Yet</Text>
+            <Text style={styles.emptyTitle}>Admin hasn't posted any salary slip yet.</Text>
             <Text style={styles.emptyMessage}>
-              The admin has not uploaded a salary slip for {MONTH_NAMES[selectedMonth - 1]} {selectedYear}. Please check back later or select another month above.
+              No salary slip document has been uploaded for {MONTH_NAMES[selectedMonth - 1]} {selectedYear}. Please check back later or select a different payroll month above.
             </Text>
             <TouchableOpacity
               style={styles.emptyRetryBtn}

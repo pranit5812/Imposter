@@ -12,7 +12,7 @@ interface AuthState {
   error: string | null;
   
   initialize: () => Promise<void>;
-  login: (username: string, password: string) => Promise<User>;
+  login: (username: string, password: string, rememberMe?: boolean) => Promise<User>;
   logout: () => Promise<void>;
   setUser: (user: User | null) => void;
   refreshProfile: () => Promise<User | null>;
@@ -61,10 +61,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  login: async (username: string, password: string) => {
+  login: async (username: string, password: string, rememberMe: boolean = true) => {
     set({ isLoading: true, error: null });
     try {
-      const result = await authService.login(username, password);
+      const result = await authService.login(username, password, rememberMe);
       // Reset attendance store immediately on new login so previous employee state never leaks
       useAttendanceStore.getState().resetAttendance();
       set({

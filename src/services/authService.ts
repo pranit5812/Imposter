@@ -28,13 +28,19 @@ export interface ResetPasswordResponse {
 }
 
 export const authService = {
-  async login(username: string, password: string): Promise<LoginResult> {
+  async login(username: string, password: string, rememberMe: boolean = true): Promise<LoginResult> {
     const response = await apiClient.post<LoginResult>('/auth/login', {
       username,
       password,
     });
     if (response.data?.access_token) {
-      await setStoredToken(response.data.access_token);
+      if (rememberMe) {
+        await setStoredToken(response.data.access_token);
+      } else {
+        // Keep in memory
+        apiClient.defaults.headers.common['Authorization'] = `Bearer ${response.data.access_token}`;
+        await clearStoredToken();
+      }
     }
     return response.data;
   },
