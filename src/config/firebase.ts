@@ -62,23 +62,6 @@ export const ADMIN_USERS = [
 
 export async function seedAdminUsersInFirestore(): Promise<void> {
   try {
-    const adminIds = ADMIN_USERS.map(a => a.id);
-
-    // Wipe all other users
-    const usersSnap = await getDocs(collection(firestoreDb, 'users'));
-    for (const d of usersSnap.docs) {
-      if (!adminIds.includes(d.id)) {
-        await deleteDoc(doc(firestoreDb, 'users', d.id)).catch(() => {});
-      }
-    }
-
-    const empsSnap = await getDocs(collection(firestoreDb, 'employees'));
-    for (const d of empsSnap.docs) {
-      if (!adminIds.includes(d.id)) {
-        await deleteDoc(doc(firestoreDb, 'employees', d.id)).catch(() => {});
-      }
-    }
-
     for (const admin of ADMIN_USERS) {
       const docRefUsers = doc(firestoreDb, 'users', admin.id);
       const docRefEmployees = doc(firestoreDb, 'employees', admin.id);
@@ -86,7 +69,7 @@ export async function seedAdminUsersInFirestore(): Promise<void> {
       await setDoc(docRefEmployees, admin, { merge: true });
     }
   } catch (err) {
-    console.warn('Firestore admin seed & wipe notice:', err);
+    console.warn('Firestore admin seed notice:', err);
   }
 }
 

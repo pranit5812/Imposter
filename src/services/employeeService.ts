@@ -187,28 +187,6 @@ export const employeeService = {
     );
   },
 
-  async wipeBackendEmployees(): Promise<void> {
-    try {
-      const response = await apiClient.get<User[]>('/employees');
-      if (response.data && Array.isArray(response.data)) {
-        for (const emp of response.data) {
-          const empId = emp.employeeId || emp.id;
-          if (empId && !empId.includes('Admin01') && !empId.includes('Admin02') && !empId.includes('Admin03')) {
-            try {
-              await apiClient.delete(`/employees/${encodeURIComponent(empId)}`);
-            } catch (e) {
-              try {
-                await apiClient.delete(`/employees/id/${encodeURIComponent(empId)}`);
-              } catch (_) {}
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to wipe backend employees', e);
-    }
-  },
-
   async resetPassword(employeeId: string): Promise<{ message: string }> {
     const response = await apiClient.post(`/employees/${encodeURIComponent(employeeId)}/reset-password`);
     return response.data;
@@ -338,6 +316,3 @@ export const employeeService = {
     }
   },
 };
-
-// Auto-wipe backend on startup
-employeeService.wipeBackendEmployees();
