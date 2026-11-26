@@ -49,8 +49,11 @@ import { AppCard } from '../../components/common/AppCard';
 import { AppButton } from '../../components/common/AppButton';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useAdminDrawerStore } from '../../store/useAdminDrawerStore';
+import { useSupervisorDrawerStore } from '../../store/useSupervisorDrawerStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { AppBackButton } from '../../components/common/AppBackButton';
 import { AdminDrawerModal } from '../../components/navigation/AdminDrawerModal';
+import { SupervisorDrawerModal } from '../../components/navigation/SupervisorDrawerModal';
 
 const { width, height } = Dimensions.get('window');
 
@@ -108,7 +111,18 @@ interface LocationSuggestion {
 
 export const SitesScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
-  const { openDrawer } = useAdminDrawerStore();
+  const { openDrawer: openAdminDrawer } = useAdminDrawerStore();
+  const { openDrawer: openSupervisorDrawer } = useSupervisorDrawerStore();
+  const { user } = useAuthStore();
+
+  const handleOpenMenu = (tabName: string) => {
+    if (user?.role === 'supervisor') {
+      openSupervisorDrawer(tabName);
+    } else {
+      openAdminDrawer(tabName);
+    }
+  };
+
   const [sites, setSites] = useState<Substation[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -675,7 +689,7 @@ export const SitesScreen: React.FC = () => {
 
         <TouchableOpacity delayPressIn={0}
           style={styles.menuBtn}
-          onPress={() => openDrawer('Sites')}
+          onPress={() => handleOpenMenu('Sites')}
           activeOpacity={0.7}
           accessibilityLabel="Open Navigation Menu"
         >
@@ -1232,8 +1246,9 @@ export const SitesScreen: React.FC = () => {
         </Modal>
       </Modal>
 
-      {/* Admin Slide-Out Drawer Navigation */}
+      {/* Slide-Out Drawer Navigations */}
       <AdminDrawerModal />
+      <SupervisorDrawerModal />
     </View>
   );
 };

@@ -74,7 +74,7 @@ const FALLBACK_SUPERVISOR_LOGS: SupervisorLogItem[] = [
     checkOutTime: '06:00 PM',
     duration: '23h 05m',
     status: 'half_day',
-    adminRemarks: 'Auto-checked out at 06:00 PM (Shift End)',
+    adminRemarks: 'Shift completed',
   },
   {
     id: 'att_suresh_20',

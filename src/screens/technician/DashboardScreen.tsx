@@ -272,8 +272,15 @@ export const DashboardScreen: React.FC<{ navigation: any }> = ({ navigation }) =
     );
   }, [todayRecord, user]);
 
-  const isShiftActive = isRecordForCurrentUser && (todayStatus === 'active' || Boolean(todayRecord?.checkIn && !todayRecord?.checkOut));
-  const isShiftConcluded = isRecordForCurrentUser && (todayStatus === 'completed' || Boolean(todayRecord?.checkIn && todayRecord?.checkOut));
+  const hasRealCheckIn = Boolean(
+    todayRecord?.checkIn && (todayRecord.checkIn.time || (todayRecord.checkIn as any).timeIST)
+  );
+  const hasRealCheckOut = Boolean(
+    todayRecord?.checkOut && (todayRecord.checkOut.time || (todayRecord.checkOut as any).timeIST)
+  );
+
+  const isShiftActive = todayStatus === 'active' || (hasRealCheckIn && !hasRealCheckOut);
+  const isShiftConcluded = todayStatus === 'completed' || (hasRealCheckIn && hasRealCheckOut);
 
   const checkOutTimeString = useMemo(() => {
     if (!todayRecord?.checkOut?.time && !(todayRecord as any)?.checkOutTime) return '--:--';

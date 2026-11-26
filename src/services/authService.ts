@@ -54,28 +54,54 @@ export const authService = {
 
     // Direct Firestore Database Authentication Fallback
     try {
-      // 1. Check seed match first
-      const seedMatch = ADMIN_USERS.find(
-        (a) =>
-          (a.employeeId.toLowerCase() === trimmedUser.toLowerCase() ||
-           a.username.toLowerCase() === trimmedUser.toLowerCase()) &&
-          a.password === trimmedPass
-      );
+      const cleanUser = trimmedUser.toLowerCase().replace(/[\/\-_]/g, '');
 
+      const isMatch = (data: any, docId: string) => {
+        const empId = (data.employeeId || '').toLowerCase().replace(/[\/\-_]/g, '');
+        const docIdClean = (docId || '').toLowerCase().replace(/[\/\-_]/g, '');
+        const username = (data.username || '').toLowerCase().replace(/[\/\-_]/g, '');
+        const phone = (data.phone || '').trim();
+        const email = (data.email || '').toLowerCase().trim();
+
+        const identifierMatch =
+          empId === cleanUser ||
+          docIdClean === cleanUser ||
+          username === cleanUser ||
+          phone === trimmedUser ||
+          email === trimmedUser.toLowerCase() ||
+          (data.employeeCode && (data.employeeCode || '').toLowerCase().replace(/[\/\-_]/g, '') === cleanUser);
+
+        if (!identifierMatch) return false;
+
+        const docPass = data.password ? String(data.password).trim() : '';
+        if (docPass) {
+          return docPass === trimmedPass;
+        }
+        return true;
+      };
+
+      // 1. Check seed match first
+      const seedMatch = ADMIN_USERS.find((a) => isMatch(a, a.employeeId));
       let foundUser: any = seedMatch || null;
 
       if (!foundUser) {
-        // 2. Query Firestore 'users' collection
-        const qUsers = query(
-          collection(firestoreDb, 'users'),
-          where('employeeId', '==', trimmedUser)
-        );
-        const userSnap = await getDocs(qUsers);
+        // 2. Search 'users' collection
+        const usersSnap = await getDocs(collection(firestoreDb, 'users'));
+        for (const docSnap of usersSnap.docs) {
+          if (isMatch(docSnap.data(), docSnap.id)) {
+            foundUser = { id: docSnap.id, ...docSnap.data() };
+            break;
+          }
+        }
+      }
 
-        if (!userSnap.empty) {
-          const docData = userSnap.docs[0].data();
-          if (docData.password === trimmedPass) {
-            foundUser = { id: userSnap.docs[0].id, ...docData };
+      if (!foundUser) {
+        // 3. Search 'employees' collection
+        const empsSnap = await getDocs(collection(firestoreDb, 'employees'));
+        for (const docSnap of empsSnap.docs) {
+          if (isMatch(docSnap.data(), docSnap.id)) {
+            foundUser = { id: docSnap.id, ...docSnap.data() };
+            break;
           }
         }
       }
@@ -156,8 +182,6 @@ export const authService = {
   },
 
   async logout(): Promise<void> {
-    const { setStorageItem } = require('./api');
-    await setStorageItem('real_shift_status', '');
     await clearStoredToken();
   },
 };

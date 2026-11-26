@@ -10,8 +10,8 @@ export interface ShiftInfo {
   isPastShiftEnd: boolean;
   isBeforeShiftStart: boolean;
   isAfterShiftEnd: boolean;
-  punctualityLabel: 'On-Time' | 'Late Checked-In' | 'Half-Day' | 'Check-In Closed';
-  statusKey: 'present' | 'late' | 'half-day' | 'closed';
+  punctualityLabel: 'On-Time (Present)' | 'Half-Day';
+  statusKey: 'present' | 'half_day';
   istHours: number;
   istMinutes: number;
   formattedTimeIST: string;
@@ -29,23 +29,48 @@ export const getShiftInfo = (): ShiftInfo => {
   const displayHours = istHours % 12 || 12;
   const formattedTimeIST = `${displayHours}:${istMinutes < 10 ? '0' : ''}${istMinutes} ${ampm}`;
 
-  // Remove all 9:00 AM & 6:00 PM restrictions. Always allow check in and never force shift end.
+  // Shift Check-In Punctuality Rules (IST):
+  // - Check-in between 9:00 AM and 10:00 AM IST (and before 9:00 AM) = Present
+  // - Check-in after 10:00 AM IST (istTotalMinutes > 600) = Half-Day
+  const isAfterTenAM = istTotalMinutes > 600; // 10:00 AM = 600 minutes from midnight
+
+  const statusKey: 'present' | 'half_day' = isAfterTenAM ? 'half_day' : 'present';
+  const punctualityLabel = isAfterTenAM ? 'Half-Day' : 'On-Time (Present)';
+  const windowMessage = isAfterTenAM
+    ? 'Checked in after 10:00 AM IST (Marked Half-Day)'
+    : 'Checked in between 09:00 AM - 10:00 AM IST (Marked Present)';
+
   return {
     isCheckInAllowed: true,
     isPastShiftEnd: false,
     isBeforeShiftStart: false,
     isAfterShiftEnd: false,
-    punctualityLabel: 'On-Time',
-    statusKey: 'present',
+    punctualityLabel,
+    statusKey,
     istHours,
     istMinutes,
     formattedTimeIST,
-    windowMessage: 'Check-in window active',
+    windowMessage,
   };
 };
 
 export const isShiftConcluded = (): boolean => {
   return false;
+};
+
+/**
+ * Ensures employee ID is cleanly formatted as "b4s/Adani/[ID]"
+ */
+export const formatEmployeeId = (empId?: string | null): string => {
+  if (!empId) return 'b4s/Adani/01';
+  const clean = empId.trim();
+  if (clean.toLowerCase().startsWith('b4s/adani/')) {
+    return `b4s/Adani/${clean.substring(10)}`;
+  }
+  if (clean.toLowerCase().startsWith('b4s/')) {
+    return `b4s/Adani/${clean.substring(4)}`;
+  }
+  return `b4s/Adani/${clean}`;
 };
 
 /**

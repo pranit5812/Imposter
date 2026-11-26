@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,8 @@ import {
   useWindowDimensions,
   ActivityIndicator,
 } from 'react-native';
+import MapView, { Marker, Circle } from '../../components/common/AppMapView';
+import * as Location from 'expo-location';
 import {
   Menu,
   ArrowLeft,
@@ -28,6 +30,9 @@ import {
   Lock,
   Layers,
   RefreshCw,
+  Plus,
+  Crosshair,
+  Building2,
 } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -44,6 +49,58 @@ import { AppBackButton } from '../../components/common/AppBackButton';
 const FALLBACK_EMPLOYEES: User[] = [];
 
 const FALLBACK_SUBSTATIONS: Substation[] = [];
+
+interface LocationSuggestion {
+  title: string;
+  subtitle: string;
+  lat: number;
+  lng: number;
+}
+
+const QUICK_PINS = [
+  {
+    name: 'Surat ST-1',
+    code: 'ADN-SITE-010',
+    address: 'Ring Road, Textile Market Hub, Surat, Gujarat 395002',
+    latitude: 21.1926,
+    longitude: 72.7997,
+  },
+  {
+    name: 'Pune Phase 1',
+    code: 'ADN-PS-001',
+    address: 'Hinjawadi Phase 1, Near Tata T-Hub, Pune, Maharashtra 411057',
+    latitude: 18.5913,
+    longitude: 73.7389,
+  },
+  {
+    name: 'BKC Smart Grid',
+    code: 'ADN-BKC-001',
+    address: 'Bandra Kurla Complex, G Block, Mumbai, Maharashtra 400051',
+    latitude: 19.0657,
+    longitude: 72.8679,
+  },
+  {
+    name: 'Ahmedabad Solar',
+    code: 'ADN-AMD-001',
+    address: 'Adani Shantigram, SG Highway, Ahmedabad, Gujarat 382421',
+    latitude: 23.0225,
+    longitude: 72.5714,
+  },
+  {
+    name: 'Mundra Energy Port',
+    code: 'ADN-MUN-001',
+    address: 'APSEZ Mundra Port Zone, Kutch, Gujarat 370421',
+    latitude: 22.7533,
+    longitude: 69.7042,
+  },
+  {
+    name: 'Bengaluru Tech Grid',
+    code: 'ADN-BLR-001',
+    address: 'Electronic City Phase 1, Bengaluru, Karnataka 560100',
+    latitude: 12.8452,
+    longitude: 77.6602,
+  },
+];
 
 export const SupervisorSiteManagementScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -77,6 +134,386 @@ export const SupervisorSiteManagementScreen: React.FC = () => {
   const [selectedPrimarySiteId, setSelectedPrimarySiteId] = useState<string>('');
   const [selectedPermittedSiteIds, setSelectedPermittedSiteIds] = useState<string[]>([]);
   const [savingAllocation, setSavingAllocation] = useState(false);
+
+  // Add Substation Site Modal (Supervisor & Admin)
+  const [showAddSiteModal, setShowAddSiteModal] = useState(false);
+  const [newSiteName, setNewSiteName] = useState('');
+  const [newSiteCode, setNewSiteCode] = useState('');
+  const [newSiteAddress, setNewSiteAddress] = useState('');
+  const [newSiteCircle, setNewSiteCircle] = useState('');
+  const [newSiteDivision, setNewSiteDivision] = useState('');
+  const [newSiteLat, setNewSiteLat] = useState('21.1926');
+  const [newSiteLng, setNewSiteLng] = useState('72.7997');
+  const [newSiteRadius, setNewSiteRadius] = useState('500');
+  const [newSiteManagerName, setNewSiteManagerName] = useState('');
+  const [newSiteManagerPhone, setNewSiteManagerPhone] = useState('');
+  const [savingNewSite, setSavingNewSite] = useState(false);
+
+  // Search & Location Autocomplete States
+  const searchDebounceTimer = useRef<any>(null);
+  const [searchLocation, setSearchLocation] = useState('');
+  const [searchingLocation, setSearchingLocation] = useState(false);
+  const [suggestions, setSuggestions] = useState<LocationSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  // Map state for Add Substation Site Modal
+  const mapRef = useRef<any>(null);
+  const [mapRegion, setMapRegion] = useState({
+    latitude: 21.1926,
+    longitude: 72.7997,
+    latitudeDelta: 0.015,
+    longitudeDelta: 0.015,
+  });
+
+  const parsedLat = parseFloat(newSiteLat) || 21.1926;
+  const parsedLng = parseFloat(newSiteLng) || 72.7997;
+  const parsedRadius = parseFloat(newSiteRadius) || 500;
+
+  // Search autocomplete handler
+  const handleSearchTextChange = (text: string) => {
+    setSearchLocation(text);
+    if (!text.trim() || text.trim().length < 2) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      setSearchingLocation(false);
+      return;
+    }
+
+    const query = text.toLowerCase().trim();
+    const localMatches: LocationSuggestion[] = [];
+
+    // Local QUICK_PINS match
+    for (const p of QUICK_PINS) {
+      if (p.name.toLowerCase().includes(query) || p.address.toLowerCase().includes(query)) {
+        localMatches.push({
+          title: p.name,
+          subtitle: p.address,
+          lat: p.latitude,
+          lng: p.longitude,
+        });
+      }
+    }
+
+    if (localMatches.length > 0) {
+      setSuggestions(localMatches.slice(0, 4));
+      setShowSuggestions(true);
+    }
+
+    if (searchDebounceTimer.current) {
+      clearTimeout(searchDebounceTimer.current);
+    }
+
+    setSearchingLocation(true);
+    searchDebounceTimer.current = setTimeout(async () => {
+      try {
+        const onlineSuggestions: LocationSuggestion[] = [];
+
+        try {
+          const placeResults = await siteService.searchPlaces(text.trim(), mapRegion.latitude, mapRegion.longitude);
+          if (Array.isArray(placeResults) && placeResults.length > 0) {
+            for (const p of placeResults) {
+              const pLat = parseFloat(p.lat || p.latitude);
+              const pLng = parseFloat(p.lon || p.lng || p.longitude);
+              if (!isNaN(pLat) && !isNaN(pLng)) {
+                onlineSuggestions.push({
+                  title: p.name || p.title || text.trim(),
+                  subtitle: p.address || p.formatted_address || `${pLat.toFixed(4)}, ${pLng.toFixed(4)}`,
+                  lat: pLat,
+                  lng: pLng,
+                });
+              }
+            }
+          }
+        } catch (_) {}
+
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 3000);
+          const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+            text.trim()
+          )}&limit=5`;
+          const res = await fetch(url, {
+            signal: controller.signal,
+            headers: { 'User-Agent': 'AdaniWorkforceApp/1.0' },
+          });
+          clearTimeout(timeoutId);
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data)) {
+              for (const item of data) {
+                const displayName = item.display_name || '';
+                const parts = displayName.split(',');
+                const title = parts[0]?.trim() || text.trim();
+                const lat = parseFloat(item.lat);
+                const lng = parseFloat(item.lon);
+                if (!isNaN(lat) && !isNaN(lng)) {
+                  onlineSuggestions.push({
+                    title,
+                    subtitle: displayName,
+                    lat,
+                    lng,
+                  });
+                }
+              }
+            }
+          }
+        } catch (_) {}
+
+        if (onlineSuggestions.length < 3) {
+          try {
+            const geo = await Location.geocodeAsync(text.trim());
+            if (geo && geo.length > 0) {
+              for (const g of geo.slice(0, 3)) {
+                onlineSuggestions.push({
+                  title: text.trim(),
+                  subtitle: `GPS: ${g.latitude.toFixed(5)}, ${g.longitude.toFixed(5)}`,
+                  lat: g.latitude,
+                  lng: g.longitude,
+                });
+              }
+            }
+          } catch (_) {}
+        }
+
+        const combined = [...localMatches];
+        for (const item of onlineSuggestions) {
+          const exists = combined.some(
+            (c) => Math.abs(c.lat - item.lat) < 0.001 && Math.abs(c.lng - item.lng) < 0.001
+          );
+          if (!exists) {
+            combined.push(item);
+          }
+        }
+
+        if (combined.length > 0) {
+          setSuggestions(combined.slice(0, 6));
+          setShowSuggestions(true);
+        }
+      } catch (err) {
+        console.warn('Autocomplete search notice:', err);
+      } finally {
+        setSearchingLocation(false);
+      }
+    }, 250);
+  };
+
+  const handleSelectSuggestion = (item: LocationSuggestion) => {
+    setSearchLocation(item.title);
+    setNewSiteAddress(item.subtitle);
+    if (!newSiteName.trim()) {
+      setNewSiteName(item.title);
+    }
+    setNewSiteLat(item.lat.toFixed(6));
+    setNewSiteLng(item.lng.toFixed(6));
+    setShowSuggestions(false);
+    setSuggestions([]);
+
+    const nextRegion = {
+      latitude: item.lat,
+      longitude: item.lng,
+      latitudeDelta: 0.012,
+      longitudeDelta: 0.012,
+    };
+    setMapRegion(nextRegion);
+    if (mapRef.current?.animateToRegion) {
+      mapRef.current.animateToRegion(nextRegion, 400);
+    }
+  };
+
+  const handleSearchAndNavigate = async () => {
+    if (!searchLocation.trim()) return;
+    setSearchingLocation(true);
+    try {
+      const geo = await Location.geocodeAsync(searchLocation);
+      if (geo && geo.length > 0) {
+        const lat = geo[0].latitude;
+        const lng = geo[0].longitude;
+        setNewSiteLat(lat.toFixed(6));
+        setNewSiteLng(lng.toFixed(6));
+        setShowSuggestions(false);
+
+        const nextRegion = {
+          latitude: lat,
+          longitude: lng,
+          latitudeDelta: 0.012,
+          longitudeDelta: 0.012,
+        };
+        setMapRegion(nextRegion);
+        if (mapRef.current?.animateToRegion) {
+          mapRef.current.animateToRegion(nextRegion, 400);
+        }
+
+        const rev = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
+        if (rev && rev.length > 0) {
+          const r = rev[0];
+          const formatted = [r.name, r.street, r.subregion, r.city, r.region, r.postalCode]
+            .filter(Boolean)
+            .join(', ');
+          if (formatted) {
+            setNewSiteAddress(formatted);
+          }
+        }
+      } else {
+        Alert.alert('Location Not Found', 'Could not locate coordinates for the searched place.');
+      }
+    } catch (e: any) {
+      Alert.alert('Search Error', 'Unable to resolve search location.');
+    } finally {
+      setSearchingLocation(false);
+    }
+  };
+
+  const handleSelectQuickPin = (pin: typeof QUICK_PINS[0]) => {
+    if (!newSiteName.trim()) {
+      setNewSiteName(pin.name);
+    }
+    setNewSiteCode(pin.code);
+    setNewSiteAddress(pin.address);
+    setNewSiteLat(pin.latitude.toFixed(6));
+    setNewSiteLng(pin.longitude.toFixed(6));
+    const nextRegion = {
+      latitude: pin.latitude,
+      longitude: pin.longitude,
+      latitudeDelta: 0.012,
+      longitudeDelta: 0.012,
+    };
+    setMapRegion(nextRegion);
+    if (mapRef.current?.animateToRegion) {
+      mapRef.current.animateToRegion(nextRegion, 400);
+    }
+  };
+
+  const handleMapPress = (coord: { latitude: number; longitude: number }) => {
+    if (coord && typeof coord.latitude === 'number' && typeof coord.longitude === 'number') {
+      setNewSiteLat(coord.latitude.toFixed(6));
+      setNewSiteLng(coord.longitude.toFixed(6));
+      setMapRegion((prev) => ({
+        ...prev,
+        latitude: coord.latitude,
+        longitude: coord.longitude,
+      }));
+    }
+  };
+
+  const handlePinCurrentGPS = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Location permission is required to fetch current GPS coordinates.');
+        return;
+      }
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const currentLat = loc.coords.latitude;
+      const currentLng = loc.coords.longitude;
+      setNewSiteLat(currentLat.toFixed(6));
+      setNewSiteLng(currentLng.toFixed(6));
+      const nextRegion = {
+        latitude: currentLat,
+        longitude: currentLng,
+        latitudeDelta: 0.015,
+        longitudeDelta: 0.015,
+      };
+      setMapRegion(nextRegion);
+      if (mapRef.current?.animateToRegion) {
+        mapRef.current.animateToRegion(nextRegion, 800);
+      }
+    } catch (e: any) {
+      Alert.alert('GPS Fetch Error', 'Unable to fetch current GPS coordinates.');
+    }
+  };
+
+  const handleZoomIn = () => {
+    setMapRegion((prev) => {
+      const next = {
+        ...prev,
+        latitudeDelta: Math.max(0.002, prev.latitudeDelta / 1.8),
+        longitudeDelta: Math.max(0.002, prev.longitudeDelta / 1.8),
+      };
+      if (mapRef.current?.animateToRegion) {
+        mapRef.current.animateToRegion(next, 300);
+      }
+      return next;
+    });
+  };
+
+  const handleZoomOut = () => {
+    setMapRegion((prev) => {
+      const next = {
+        ...prev,
+        latitudeDelta: Math.min(0.5, prev.latitudeDelta * 1.8),
+        longitudeDelta: Math.min(0.5, prev.longitudeDelta * 1.8),
+      };
+      if (mapRef.current?.animateToRegion) {
+        mapRef.current.animateToRegion(next, 300);
+      }
+      return next;
+    });
+  };
+
+  const handleOpenAddSite = () => {
+    setNewSiteName('');
+    setNewSiteCode(`ADN-SITE-00${substations.length + 1}`);
+    setNewSiteAddress('');
+    setNewSiteCircle(user?.circle || 'Ahmedabad Circle');
+    setNewSiteDivision(user?.division || 'North Division');
+    setNewSiteLat('21.1926');
+    setNewSiteLng('72.7997');
+    setNewSiteRadius('500');
+    setNewSiteManagerName(user?.name || '');
+    setNewSiteManagerPhone(user?.phone || '');
+    setMapRegion({
+      latitude: 21.1926,
+      longitude: 72.7997,
+      latitudeDelta: 0.015,
+      longitudeDelta: 0.015,
+    });
+    setShowAddSiteModal(true);
+  };
+
+  const handleSaveNewSite = async () => {
+    if (!newSiteName.trim()) {
+      Alert.alert('Missing Name', 'Please enter Substation Site Name.');
+      return;
+    }
+    const latNum = parseFloat(newSiteLat);
+    const lngNum = parseFloat(newSiteLng);
+    if (isNaN(latNum) || isNaN(lngNum) || latNum < -90 || latNum > 90 || lngNum < -180 || lngNum > 180) {
+      Alert.alert('Invalid Coordinates', 'Please enter valid GPS coordinates (Latitude -90 to 90, Longitude -180 to 180).');
+      return;
+    }
+    const radNum = parseFloat(newSiteRadius) || 500;
+    const safeCode = (newSiteCode.trim() || `ADN-SITE-${Math.floor(100 + Math.random() * 900)}`).toUpperCase();
+
+    setSavingNewSite(true);
+    try {
+      const sitePayload = {
+        name: newSiteName.trim(),
+        code: safeCode,
+        address: newSiteAddress.trim() || undefined,
+        circle: newSiteCircle.trim() || undefined,
+        division: newSiteDivision.trim() || undefined,
+        latitude: latNum,
+        longitude: lngNum,
+        radiusMeters: radNum,
+        manager: newSiteManagerName.trim() ? {
+          name: newSiteManagerName.trim(),
+          phone: newSiteManagerPhone.trim() || undefined,
+          designation: 'Site Manager',
+        } : undefined,
+        status: 'active' as const,
+      };
+
+      await siteService.createSite(sitePayload);
+      Alert.alert('Substation Site Created', `Site "${newSiteName}" was created successfully.`);
+      setShowAddSiteModal(false);
+      fetchData();
+    } catch (err: any) {
+      console.warn('Create site error:', err);
+      Alert.alert('Creation Error', err.message || 'Unable to create substation site.');
+    } finally {
+      setSavingNewSite(false);
+    }
+  };
 
   // Fetch initial data
   const fetchData = async () => {
@@ -332,15 +769,26 @@ export const SupervisorSiteManagementScreen: React.FC = () => {
           <Text style={styles.screenTitle} numberOfLines={1}>Site Allocation Management</Text>
         </View>
 
-        <TouchableOpacity delayPressIn={0}
-          style={styles.refreshIconBtn}
-          onPress={onRefresh}
-          activeOpacity={0.7}
-          accessibilityLabel="Refresh Records"
-        >
-          <RefreshCw size={13} color="#1E63F0" style={{ marginRight: 4 }} />
-          <Text style={styles.refreshIconBtnText}>Sync</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <TouchableOpacity delayPressIn={0}
+            style={styles.addSiteHeaderBtn}
+            onPress={handleOpenAddSite}
+            activeOpacity={0.8}
+          >
+            <Plus size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
+            <Text style={styles.addSiteHeaderBtnText}>+ Add New Substation</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity delayPressIn={0}
+            style={styles.refreshIconBtn}
+            onPress={onRefresh}
+            activeOpacity={0.7}
+            accessibilityLabel="Refresh Records"
+          >
+            <RefreshCw size={13} color="#1E63F0" style={{ marginRight: 4 }} />
+            <Text style={styles.refreshIconBtnText}>Sync</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -1000,6 +1448,360 @@ export const SupervisorSiteManagementScreen: React.FC = () => {
         </TouchableOpacity>
       </Modal>
 
+      {/* ============================================================== */}
+      {/* 8. ADD SUBSTATION SITE MODAL (SUPERVISOR & ADMIN)               */}
+      {/* ============================================================== */}
+      <Modal
+        visible={showAddSiteModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowAddSiteModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.siteModalCard, SHADOWS.lg]}>
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Zap size={20} color="#1E63F0" />
+                <Text style={styles.modalTitle}>Add New Substation Site</Text>
+              </View>
+              <TouchableOpacity delayPressIn={0}
+                style={styles.modalCloseBtn}
+                onPress={() => setShowAddSiteModal(false)}
+              >
+                <X size={18} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 440 }} showsVerticalScrollIndicator={false}>
+              <View style={styles.modalBody}>
+                {/* Site Name & Code */}
+                <View style={styles.formRow}>
+                  <View style={styles.formCol}>
+                    <Text style={styles.formLabel}>Substation Site Name *</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="e.g. Kothrud 132kV Substation"
+                      placeholderTextColor="#94A3B8"
+                      value={newSiteName}
+                      onChangeText={setNewSiteName}
+                    />
+                  </View>
+                  <View style={styles.formCol}>
+                    <Text style={styles.formLabel}>Site Code *</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="e.g. ADN-SITE-009"
+                      placeholderTextColor="#94A3B8"
+                      value={newSiteCode}
+                      onChangeText={setNewSiteCode}
+                      autoCapitalize="characters"
+                    />
+                  </View>
+                </View>
+
+                {/* Circle & Division */}
+                <View style={styles.formRow}>
+                  <View style={styles.formCol}>
+                    <Text style={styles.formLabel}>Circle</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="e.g. Ahmedabad Circle"
+                      placeholderTextColor="#94A3B8"
+                      value={newSiteCircle}
+                      onChangeText={setNewSiteCircle}
+                    />
+                  </View>
+                  <View style={styles.formCol}>
+                    <Text style={styles.formLabel}>Division</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="e.g. North Division"
+                      placeholderTextColor="#94A3B8"
+                      value={newSiteDivision}
+                      onChangeText={setNewSiteDivision}
+                    />
+                  </View>
+                </View>
+
+                {/* Baseline Latitude & Longitude */}
+                <View style={styles.formRow}>
+                  <View style={styles.formCol}>
+                    <Text style={styles.formLabel}>Baseline Latitude *</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="e.g. 21.1926"
+                      placeholderTextColor="#94A3B8"
+                      keyboardType="numeric"
+                      value={newSiteLat}
+                      onChangeText={setNewSiteLat}
+                    />
+                  </View>
+                  <View style={styles.formCol}>
+                    <Text style={styles.formLabel}>Baseline Longitude *</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="e.g. 72.7997"
+                      placeholderTextColor="#94A3B8"
+                      keyboardType="numeric"
+                      value={newSiteLng}
+                      onChangeText={setNewSiteLng}
+                    />
+                  </View>
+                </View>
+
+                {/* Location Section Header & Pin GPS Button */}
+                <View style={styles.locationHeaderRow}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <MapPin size={15} color="#EF4444" style={{ marginRight: 6 }} />
+                    <Text style={styles.formSectionTitle}>Site Location & Address</Text>
+                  </View>
+
+                  <TouchableOpacity delayPressIn={0}
+                    style={styles.pinGpsBtn}
+                    onPress={handlePinCurrentGPS}
+                    activeOpacity={0.8}
+                  >
+                    <Crosshair size={13} color="#2563EB" style={{ marginRight: 4 }} />
+                    <Text style={styles.pinGpsBtnText}>Pin My Current GPS</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Location Search Bar */}
+                <View style={styles.searchBarWrapper}>
+                  <View style={styles.searchInputContainer}>
+                    <Search size={16} color="#94A3B8" style={{ marginRight: 8 }} />
+                    <TextInput
+                      style={styles.searchTextInput}
+                      placeholder="Search location, city, or address..."
+                      placeholderTextColor="#94A3B8"
+                      value={searchLocation}
+                      onChangeText={handleSearchTextChange}
+                      onSubmitEditing={handleSearchAndNavigate}
+                    />
+                    {searchLocation.length > 0 && (
+                      <TouchableOpacity delayPressIn={0}
+                        onPress={() => {
+                          setSearchLocation('');
+                          setSuggestions([]);
+                          setShowSuggestions(false);
+                        }}
+                        style={{ padding: 4 }}
+                      >
+                        <X size={16} color="#94A3B8" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+
+                  <TouchableOpacity delayPressIn={0}
+                    style={styles.searchNavBtn}
+                    onPress={handleSearchAndNavigate}
+                    activeOpacity={0.85}
+                    disabled={searchingLocation}
+                  >
+                    {searchingLocation ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.searchNavBtnText}>Search & Navigate</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+
+                {/* Autocomplete Suggestions Dropdown */}
+                {showSuggestions && suggestions.length > 0 && (
+                  <View style={[styles.suggestionsBox, SHADOWS.md]}>
+                    <View style={styles.suggestionsHeader}>
+                      <Text style={styles.suggestionsHeaderText}>
+                        SELECT LOCATION SUGGESTION ({suggestions.length})
+                      </Text>
+                    </View>
+                    <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                      {suggestions.map((item, index) => (
+                        <TouchableOpacity delayPressIn={0}
+                          key={`${item.title}-${index}`}
+                          style={[
+                            styles.suggestionItem,
+                            index === suggestions.length - 1 && { borderBottomWidth: 0 },
+                          ]}
+                          onPress={() => handleSelectSuggestion(item)}
+                          activeOpacity={0.7}
+                        >
+                          <View style={styles.suggestionIconWrap}>
+                            <MapPin size={15} color="#2563EB" />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.suggestionTitle} numberOfLines={1}>
+                              {item.title}
+                            </Text>
+                            <Text style={styles.suggestionSub} numberOfLines={2}>
+                              {item.subtitle}
+                            </Text>
+                            <View style={styles.coordTag}>
+                              <Text style={styles.coordTagText}>
+                                GPS: {item.lat.toFixed(5)}, {item.lng.toFixed(5)}
+                              </Text>
+                            </View>
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+
+                {/* Quick Location Presets */}
+                <View style={{ marginVertical: 8 }}>
+                  <Text style={styles.quickPinsLabel}>QUICK LOCATION PRESETS</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 4 }}>
+                    {QUICK_PINS.map((pin) => (
+                      <TouchableOpacity delayPressIn={0}
+                        key={pin.code}
+                        style={styles.quickPinChip}
+                        onPress={() => handleSelectQuickPin(pin)}
+                        activeOpacity={0.8}
+                      >
+                        <MapPin size={12} color="#1E63F0" style={{ marginRight: 4 }} />
+                        <Text style={styles.quickPinChipText}>{pin.name}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+
+                {/* Interactive Map View */}
+                <View style={styles.mapContainer}>
+                  <MapView
+                    ref={mapRef}
+                    style={styles.map}
+                    region={mapRegion}
+                    onPress={(e) => handleMapPress(e.nativeEvent.coordinate)}
+                  >
+                    {/* Geofence Circle */}
+                    <Circle
+                      center={{ latitude: parsedLat, longitude: parsedLng }}
+                      radius={parsedRadius}
+                      strokeColor="#10B981"
+                      strokeWidth={2}
+                      fillColor="rgba(16, 185, 129, 0.16)"
+                    />
+
+                    {/* Draggable Marker */}
+                    <Marker
+                      coordinate={{ latitude: parsedLat, longitude: parsedLng }}
+                      draggable
+                      onDragEnd={(e) => handleMapPress(e.nativeEvent.coordinate)}
+                    >
+                      <View style={styles.customMarkerContainer}>
+                        <View style={styles.customMarkerPill}>
+                          <Building2 size={12} color="#FFFFFF" style={{ marginRight: 4 }} />
+                          <Text style={styles.customMarkerText} numberOfLines={1}>
+                            {newSiteName || 'Site Location'}
+                          </Text>
+                        </View>
+                        <View style={styles.markerTriangle} />
+                      </View>
+                    </Marker>
+                  </MapView>
+
+                  {/* Instruction Tag */}
+                  <View style={styles.mapInstructionPill}>
+                    <Text style={styles.mapInstructionText}>
+                      Tap map or drag pin to set exact coordinates
+                    </Text>
+                  </View>
+
+                  {/* Zoom Controls */}
+                  <View style={styles.zoomControlsWrap}>
+                    <TouchableOpacity delayPressIn={0} style={styles.zoomBtn} onPress={handleZoomIn}>
+                      <Text style={styles.zoomBtnText}>+</Text>
+                    </TouchableOpacity>
+                    <View style={styles.zoomDivider} />
+                    <TouchableOpacity delayPressIn={0} style={styles.zoomBtn} onPress={handleZoomOut}>
+                      <Text style={styles.zoomBtnText}>-</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Geofence Radius */}
+                <View style={{ marginTop: 10 }}>
+                  <Text style={styles.formLabel}>Geofence Radius (Meters) *</Text>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="e.g. 500"
+                    placeholderTextColor="#94A3B8"
+                    keyboardType="numeric"
+                    value={newSiteRadius}
+                    onChangeText={setNewSiteRadius}
+                  />
+                  <Text style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>
+                    Technicians must check in within this radius (default 500m).
+                  </Text>
+                </View>
+
+                {/* Contact Manager Name & Phone */}
+                <View style={[styles.formRow, { marginTop: 10 }]}>
+                  <View style={styles.formCol}>
+                    <Text style={styles.formLabel}>Site Manager / In-Charge</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="e.g. Rajesh Kumar"
+                      placeholderTextColor="#94A3B8"
+                      value={newSiteManagerName}
+                      onChangeText={setNewSiteManagerName}
+                    />
+                  </View>
+                  <View style={styles.formCol}>
+                    <Text style={styles.formLabel}>Manager Phone</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="e.g. 9876543210"
+                      placeholderTextColor="#94A3B8"
+                      keyboardType="phone-pad"
+                      value={newSiteManagerPhone}
+                      onChangeText={setNewSiteManagerPhone}
+                    />
+                  </View>
+                </View>
+
+                {/* Site Address */}
+                <View style={{ marginTop: 10 }}>
+                  <Text style={styles.formLabel}>Site Address / Location Notes</Text>
+                  <TextInput
+                    style={[styles.formInput, { height: 50 }]}
+                    placeholder="e.g. Substation Yard Gate 2, Ring Road, Textile Hub"
+                    placeholderTextColor="#94A3B8"
+                    multiline
+                    value={newSiteAddress}
+                    onChangeText={setNewSiteAddress}
+                  />
+                </View>
+              </View>
+            </ScrollView>
+
+            <View style={styles.modalFooter}>
+              <TouchableOpacity delayPressIn={0}
+                style={styles.cancelBtn}
+                onPress={() => setShowAddSiteModal(false)}
+                disabled={savingNewSite}
+              >
+                <Text style={styles.cancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity delayPressIn={0}
+                style={styles.saveBtn}
+                onPress={handleSaveNewSite}
+                disabled={savingNewSite}
+              >
+                {savingNewSite ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <MapPin size={14} color="#FFFFFF" style={{ marginRight: 4 }} />
+                    <Text style={styles.saveBtnText}>Save Baseline Coordinates</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Drawer */}
       <SupervisorDrawerModal />
     </View>
@@ -1019,6 +1821,316 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E2E8F0',
+  },
+  addSiteHeaderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1E63F0',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 10,
+    elevation: 3,
+    shadowColor: '#1E63F0',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+  },
+  addSiteHeaderBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
+  },
+  siteModalCard: {
+    width: '95%',
+    maxWidth: 600,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 24,
+  },
+  modalBody: {
+    paddingVertical: 4,
+  },
+  formRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+  },
+  formCol: {
+    flex: 1,
+  },
+  formLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+    marginBottom: 4,
+  },
+  formInput: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 13,
+    color: '#0F172A',
+  },
+  formSectionTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  searchBarWrapper: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 6,
+    marginBottom: 8,
+  },
+  searchInputContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    height: 38,
+  },
+  searchTextInput: {
+    flex: 1,
+    fontSize: 12,
+    color: '#0F172A',
+    paddingVertical: 0,
+  },
+  searchNavBtn: {
+    backgroundColor: '#1E63F0',
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchNavBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  suggestionsBox: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    marginBottom: 8,
+    overflow: 'hidden',
+  },
+  suggestionsHeader: {
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  suggestionsHeaderText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#64748B',
+  },
+  suggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  suggestionIconWrap: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  suggestionTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  suggestionSub: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 1,
+  },
+  coordTag: {
+    marginTop: 2,
+  },
+  coordTagText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#2563EB',
+  },
+  quickPinsLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 0.5,
+  },
+  quickPinChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    marginRight: 6,
+  },
+  quickPinChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1E63F0',
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  cancelBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
+  },
+  cancelBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  locationHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 12,
+    marginBottom: 6,
+  },
+  pinGpsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  pinGpsBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#2563EB',
+  },
+  mapContainer: {
+    height: 200,
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    marginTop: 4,
+    position: 'relative',
+  },
+  map: {
+    width: '100%',
+    height: '100%',
+  },
+  customMarkerContainer: {
+    alignItems: 'center',
+  },
+  customMarkerPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1E63F0',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    elevation: 4,
+  },
+  customMarkerText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  markerTriangle: {
+    width: 0,
+    height: 0,
+    backgroundColor: 'transparent',
+    borderStyle: 'solid',
+    borderLeftWidth: 5,
+    borderRightWidth: 5,
+    borderBottomWidth: 6,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderBottomColor: '#1E63F0',
+    transform: [{ rotate: '180deg' }],
+    marginTop: -1,
+  },
+  mapInstructionPill: {
+    position: 'absolute',
+    top: 8,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.82)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  mapInstructionText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  zoomControlsWrap: {
+    position: 'absolute',
+    right: 8,
+    bottom: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    elevation: 3,
+  },
+  zoomBtn: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  zoomBtnText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  zoomDivider: {
+    height: 1,
+    backgroundColor: '#E2E8F0',
+  },
+  saveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#1E63F0',
+  },
+  saveBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   headerLeft: {
     flexDirection: 'row',

@@ -57,6 +57,7 @@ export interface Substation {
 
 export interface PunchRecord {
   time: string;
+  timeIST?: string;
   latitude: number;
   longitude: number;
   accuracy: number;

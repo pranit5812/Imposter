@@ -300,8 +300,17 @@ export const SupervisorDashboardScreen: React.FC = () => {
   const [isSubmittingPhoto, setIsSubmittingPhoto] = useState(false);
   const cameraRef = useRef<any>(null);
 
-  // Normal Check-In Handler: Opens camera modal (no site assignment or time restrictions required other than photo)
+  // Normal Check-In Handler: Opens camera modal (blocked after 6:00 PM IST)
   const handleNormalCheckIn = () => {
+    const shift = getShiftInfo();
+    if (shift.istHours >= 18) {
+      Alert.alert(
+        'Check-In Closed',
+        'Shift check-in closed at 06:00 PM IST. Check-in is not permitted after 06:00 PM.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
     setCapturedPhotoUri(null);
     setShowCameraModal(true);
   };
@@ -319,6 +328,17 @@ export const SupervisorDashboardScreen: React.FC = () => {
   };
 
   const handleSubmitPhotoAndCheckIn = async () => {
+    const shift = getShiftInfo();
+    if (shift.istHours >= 18) {
+      Alert.alert(
+        'Check-In Closed',
+        'Shift check-in closed at 06:00 PM IST. Check-in is not permitted after 06:00 PM.'
+      );
+      setIsSubmittingPhoto(false);
+      setShowCameraModal(false);
+      return;
+    }
+
     if (!capturedPhotoUri) {
       Alert.alert('Photo Required', 'Check-in photo is compulsory. Please capture a photo before checking in.');
       return;
@@ -332,7 +352,7 @@ export const SupervisorDashboardScreen: React.FC = () => {
         console.warn('Supervisor photo upload fallback:', err);
       }
 
-      const assignedSiteId = user?.assignedSiteId || user?.assignedSiteIds?.[0] || 'supervisor-general-site';
+      const assignedSiteId = user?.assignedSiteId || user?.assignedSiteIds?.[0] || 'site_ahmedabad_01';
       const record = await attendanceService.checkIn({
         siteId: assignedSiteId,
         latitude: deviceCoords.latitude,
@@ -340,6 +360,8 @@ export const SupervisorDashboardScreen: React.FC = () => {
         accuracy: 10,
         photoUrl: uploadedUrl,
         remarks: 'Supervisor Photo Verified Check-In',
+        employeeId: user?.employeeId || user?.id,
+        employeeName: user?.name,
       });
 
       useAttendanceStore.setState({
@@ -368,13 +390,18 @@ export const SupervisorDashboardScreen: React.FC = () => {
   const executeSupervisorCheckOut = async () => {
     setCheckingOut(true);
     try {
-      const activeRecordId = todayData?.record?.id || (todayData?.record as any)?._id;
-      await attendanceService.checkOut({
+      const activeRecordId = todayData?.record?.id || todayRecord?.id || (todayData?.record as any)?._id;
+      const record = await attendanceService.checkOut({
         recordId: activeRecordId,
         latitude: deviceCoords.latitude,
         longitude: deviceCoords.longitude,
         accuracy: 10,
         remarks: 'Supervisor Normal Check-Out',
+      });
+
+      useAttendanceStore.setState({
+        todayStatus: 'completed',
+        todayRecord: record,
       });
 
       setShowCheckOutConfirm(false);
@@ -395,41 +422,27 @@ export const SupervisorDashboardScreen: React.FC = () => {
     }
   };
 
-  // Helper variables for display
-  const isRecordForCurrentUser = useMemo(() => {
-    if (!todayData?.record || !user) return false;
-    const userEmpId = (user.employeeId || '').toLowerCase().trim();
-    const userId = (user.id || (user as any)._id || '').toLowerCase().trim();
-    const recEmpId = (todayData.record.employeeId || '').toLowerCase().trim();
-    const recTechCode = ((todayData.record as any).technicianCode || '').toLowerCase().trim();
-    const recUserId = ((todayData.record as any).userId || '').toLowerCase().trim();
-    return (
-      Boolean(userEmpId && (recEmpId === userEmpId || recTechCode === userEmpId || recUserId === userEmpId)) ||
-      Boolean(userId && (recEmpId === userId || recTechCode === userId || recUserId === userId))
-    );
-  }, [todayData?.record, user]);
+  const { todayStatus, todayRecord } = useAttendanceStore();
 
   const hasRealCheckIn = Boolean(
-    todayData?.record?.checkIn && (todayData.record.checkIn.time || (todayData.record.checkIn as any).timeIST)
+    (todayData?.record?.checkIn && (todayData.record.checkIn.time || (todayData.record.checkIn as any).timeIST)) ||
+    (todayRecord?.checkIn && (todayRecord.checkIn.time || (todayRecord.checkIn as any).timeIST))
   );
   const hasRealCheckOut = Boolean(
-    todayData?.record?.checkOut && (todayData.record.checkOut.time || (todayData.record.checkOut as any).timeIST)
+    (todayData?.record?.checkOut && (todayData.record.checkOut.time || (todayData.record.checkOut as any).timeIST)) ||
+    (todayRecord?.checkOut && (todayRecord.checkOut.time || (todayRecord.checkOut as any).timeIST))
   );
 
-  const isShiftActive = isRecordForCurrentUser && hasRealCheckIn && !hasRealCheckOut;
-  const isShiftCompleted = isRecordForCurrentUser && hasRealCheckIn && hasRealCheckOut;
+  const isShiftActive = todayStatus === 'active' || (hasRealCheckIn && !hasRealCheckOut);
+  const isShiftCompleted = todayStatus === 'completed' || (hasRealCheckIn && hasRealCheckOut);
   const hasShiftStarted = isShiftActive || isShiftCompleted;
 
-  const checkInRecord = todayData?.record?.checkIn;
   const checkInTimeString = useMemo(() => {
-    if (!checkInRecord?.time) return '--:--';
-    try {
-      const dt = new Date(checkInRecord.time);
-      return dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
-    } catch {
-      return '--:--';
-    }
-  }, [checkInRecord]);
+    const rec = todayRecord || todayData?.record;
+    const rawTime = rec?.checkIn?.time || (rec as any)?.checkInTime;
+    if (!rawTime) return '--:--';
+    return (rec?.checkIn as any)?.timeIST || formatTimeIST(rawTime);
+  }, [todayRecord, todayData]);
 
   const checkOutTimeString = useMemo(() => {
     const rawTime = todayData?.record?.checkOut?.time || (todayData?.record as any)?.checkOutTime;
@@ -813,33 +826,32 @@ export const SupervisorDashboardScreen: React.FC = () => {
         <View style={styles.policyStrip}>
           <Clock size={13} color="#2563EB" style={{ marginRight: 6 }} />
           <Text style={styles.policyStripText}>
-            Shift Window: 09:00 AM – 06:00 PM IST | After 06:00 PM Disabled (Reopens 09:00 AM) | Auto Check-Out at 06:00 PM
+            Shift Window: Unrestricted | Check-in & Check-out permitted anytime
           </Text>
         </View>
 
         {/* ============================================================== */}
-        {/* SECTION 4: CHECKED-IN FIELD STAFF TODAY CARD (IMAGE 2)         */}
+        {/* SECTION 4: CHECKED-IN FIELD STAFF TODAY CARD                   */}
         {/* ============================================================== */}
         <View style={styles.staffCard}>
-          <View style={styles.cardHeaderRow}>
-            <View style={styles.cardIconBox}>
-              <Users size={18} color="#1E63F0" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <View style={styles.cardTitleWrap}>
-                <Text style={styles.cardTitle}>Checked-In Field Staff Today</Text>
-                <View style={styles.staffCountBadge}>
-                  <Text style={styles.staffCountBadgeText}>
-                    {fieldStaff.length} Checked In
-                  </Text>
-                </View>
+          <View style={styles.cardHeaderCol}>
+            <View style={styles.cardHeaderTopRow}>
+              <View style={styles.cardIconBox}>
+                <Users size={18} color="#1E63F0" />
               </View>
-              <Text style={styles.cardSubTitle}>
-                Live daily attendance roster of field technicians and installers
-              </Text>
+              <Text style={styles.cardTitleFlex}>Checked-In Field Staff Today</Text>
+              <View style={styles.staffCountBadge}>
+                <Text style={styles.staffCountBadgeText}>
+                  {fieldStaff.length} Checked In
+                </Text>
+              </View>
             </View>
 
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={styles.cardSubTitle}>
+              Live daily attendance roster of field technicians and installers
+            </Text>
+
+            <View style={styles.cardActionRow}>
               <TouchableOpacity delayPressIn={0}
                 style={[styles.refreshListBtn, { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' }]}
                 onPress={() => navigation.navigate('Tracking')}
@@ -919,61 +931,62 @@ export const SupervisorDashboardScreen: React.FC = () => {
         {/* SECTION 5: MY ATTENDANCE REVIEW & WORK HOURS                   */}
         {/* ============================================================== */}
         <View style={styles.analyticsCard}>
-            <View style={styles.cardHeaderRow}>
+          <View style={styles.cardHeaderCol}>
+            <View style={styles.cardHeaderTopRow}>
               <View style={styles.cardIconBox}>
                 <BarChart3 size={18} color="#1E63F0" />
               </View>
               <View style={{ flex: 1 }}>
-                <View style={styles.cardTitleWrap}>
-                  <Text style={styles.cardTitle}>My Attendance Review & Work Hours</Text>
-                  <View style={styles.analyticsPill}>
-                    <Text style={styles.analyticsPillText}>EMPLOYEE ANALYTICS</Text>
-                  </View>
+                <Text style={styles.cardTitleFlex}>My Attendance Review & Work Hours</Text>
+                <View style={styles.analyticsPill}>
+                  <Text style={styles.analyticsPillText}>SUPERVISOR ANALYTICS</Text>
                 </View>
-              </View>
-
-              <View style={styles.analyticsHeaderActions}>
-                <View style={styles.segmentToggle}>
-                  <TouchableOpacity delayPressIn={0}
-                    style={[styles.segmentBtn, chartMode === 'daily' && styles.segmentBtnActive]}
-                    onPress={() => setChartMode('daily')}
-                  >
-                    <Text
-                      style={[
-                        styles.segmentBtnText,
-                        chartMode === 'daily' && styles.segmentBtnTextActive,
-                      ]}
-                    >
-                      Daily Hours Trend
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity delayPressIn={0}
-                    style={[styles.segmentBtn, chartMode === 'distribution' && styles.segmentBtnActive]}
-                    onPress={() => setChartMode('distribution')}
-                  >
-                    <Text
-                      style={[
-                        styles.segmentBtnText,
-                        chartMode === 'distribution' && styles.segmentBtnTextActive,
-                      ]}
-                    >
-                      Shift Distribution
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                <TouchableOpacity delayPressIn={0}
-                  style={styles.fullLogsBtn}
-                  onPress={() => navigation.navigate('AttendanceLogs')}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.fullLogsBtnText}>→ Full Logs</Text>
-                </TouchableOpacity>
               </View>
             </View>
 
-            {/* Visual Bar Chart */}
-            <View style={styles.chartWrapper}>
+            <View style={styles.analyticsHeaderActions}>
+              <View style={styles.segmentToggle}>
+                <TouchableOpacity delayPressIn={0}
+                  style={[styles.segmentBtn, chartMode === 'daily' && styles.segmentBtnActive]}
+                  onPress={() => setChartMode('daily')}
+                >
+                  <Text
+                    style={[
+                      styles.segmentBtnText,
+                      chartMode === 'daily' && styles.segmentBtnTextActive,
+                    ]}
+                  >
+                    Daily Hours Trend
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity delayPressIn={0}
+                  style={[styles.segmentBtn, chartMode === 'distribution' && styles.segmentBtnActive]}
+                  onPress={() => setChartMode('distribution')}
+                >
+                  <Text
+                    style={[
+                      styles.segmentBtnText,
+                      chartMode === 'distribution' && styles.segmentBtnTextActive,
+                    ]}
+                  >
+                    Shift Distribution
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity delayPressIn={0}
+                style={styles.fullLogsBtn}
+                onPress={() => navigation.navigate('AttendanceLogs')}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.fullLogsBtnText}>→ Full Logs</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Visual Bar Chart */}
+          <View style={styles.chartWrapper}>
               {/* Chart Legend */}
               <View style={styles.chartLegendRow}>
                 <View style={styles.legendItem}>
@@ -1806,12 +1819,27 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
   },
-  cardHeaderRow: {
+  cardHeaderCol: {
+    marginBottom: 14,
+    gap: 6,
+  },
+  cardHeaderTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    marginBottom: 16,
-    flexWrap: 'wrap',
+    gap: 10,
+    width: '100%',
+  },
+  cardTitleFlex: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0F172A',
+    flex: 1,
+  },
+  cardActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
   },
   cardIconBox: {
     width: 38,
@@ -1834,10 +1862,11 @@ const styles = StyleSheet.create({
   staffCountBadge: {
     backgroundColor: '#EFF6FF',
     paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
+    paddingVertical: 3,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#BFDBFE',
+    flexShrink: 0,
   },
   staffCountBadgeText: {
     fontSize: 10.5,
@@ -1847,7 +1876,7 @@ const styles = StyleSheet.create({
   cardSubTitle: {
     fontSize: 11.5,
     color: '#64748B',
-    marginTop: 2,
+    marginTop: 1,
   },
   refreshListBtn: {
     flexDirection: 'row',

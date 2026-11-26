@@ -65,13 +65,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const result = await authService.login(username, password, rememberMe);
-      // Reset attendance store immediately on new login so previous employee state never leaks
-      useAttendanceStore.getState().resetAttendance();
       set({
         user: result.user,
         token: result.access_token,
         isLoading: false,
       });
+      // Immediately restore today's attendance for the logged-in user
+      useAttendanceStore.getState().fetchTodayAttendance().catch(() => {});
       return result.user;
     } catch (err: any) {
       set({

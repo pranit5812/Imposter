@@ -11,9 +11,12 @@ import {
   Modal,
   Linking,
   Dimensions,
+  TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import MapView, { Marker, Circle } from '../../components/common/AppMapView';
 import Svg, { G, Circle as SvgCircle } from 'react-native-svg';
+import { formatTimeIST, formatEmployeeId } from '../../utils/shiftUtils';
 import {
   Users,
   ShieldCheck,
@@ -41,12 +44,15 @@ import {
   AlertCircle,
   Menu,
   Camera,
+  Trash2,
+  Lock,
 } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuthStore } from '../../store/useAuthStore';
 import { resolvePhotoUrl } from '../../utils/imageUrl';
 import { getStorageItem, setStorageItem } from '../../services/api';
 import { employeeService } from '../../services/employeeService';
+import { attendanceService } from '../../services/attendanceService';
 import {
   dashboardService,
   AdminStats,
@@ -102,6 +108,69 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
   const [selectedRecord, setSelectedRecord] = useState<RecentAttendanceItem | null>(null);
   const [mapModalRecord, setMapModalRecord] = useState<RecentAttendanceItem | null>(null);
 
+  // State for IDs hidden strictly from Recent Attendance view on Dashboard
+  const [hiddenRecentIds, setHiddenRecentIds] = useState<string[]>([]);
+  const [allHistoricalLogs, setAllHistoricalLogs] = useState<any[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const stored = await getStorageItem('hidden_recent_attendance_ids');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            setHiddenRecentIds(parsed);
+          }
+        }
+      } catch (_) {}
+    })();
+  }, []);
+
+  const hideRecentRecords = async (idsToHide: string[]) => {
+    const updated = Array.from(new Set([...hiddenRecentIds, ...idsToHide]));
+    setHiddenRecentIds(updated);
+    await setStorageItem('hidden_recent_attendance_ids', JSON.stringify(updated)).catch(() => {});
+  };
+
+  // Delete Day Logs (Only from Recent Attendance Page - Master Logs/Muster Roll remain intact)
+  const handleDeleteDay = (group: { dateHeader: string; records: RecentAttendanceItem[] }) => {
+    Alert.alert(
+      'Remove Day Log from Dashboard',
+      `Are you sure you want to remove attendance logs for ${group.dateHeader} from the Recent Attendance page?\n\n(Note: Master attendance logs and muster roll records will remain intact in the database).`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Confirm Remove',
+          style: 'destructive',
+          onPress: async () => {
+            const idsToRemove = group.records.map((r) => r.id);
+            await hideRecentRecords(idsToRemove);
+            Alert.alert('Removed from Dashboard', `Logs for ${group.dateHeader} removed from Recent Attendance page. Master logs & muster roll remain intact.`);
+          },
+        },
+      ]
+    );
+  };
+
+  // Delete Single Employee Log (Only from Recent Attendance Page - Master Logs/Muster Roll remain intact)
+  const handleDeleteRecord = (rec: RecentAttendanceItem) => {
+    Alert.alert(
+      'Remove Log from Dashboard',
+      `Are you sure you want to remove attendance log for ${rec.employeeName} (${rec.employeeId}) from the Recent Attendance page?\n\n(Note: Master attendance logs and muster roll records will remain intact in the database).`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Confirm Remove',
+          style: 'destructive',
+          onPress: async () => {
+            await hideRecentRecords([rec.id]);
+            Alert.alert('Removed from Dashboard', `Log for ${rec.employeeName} removed from Recent Attendance page. Master logs & muster roll remain intact.`);
+          },
+        },
+      ]
+    );
+  };
+
   // Chart view mode: Volume breakdown vs Punctuality percentage
   const [chartMode, setChartMode] = useState<'volume' | 'punctuality'>('volume');
 
@@ -128,8 +197,110 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
         dashboardService.getAdminStats().catch(() => null),
         employeeService.getEmployees().catch(() => []),
       ]);
-      if (data) setStats(data);
       if (emps && Array.isArray(emps)) setEmployeesList(emps);
+
+      const todayIso = new Date().toISOString().split('T')[0];
+
+      // Fetch live check-in logs from Firestore for TODAY ONLY
+      try {
+        const { firestoreDb } = require('../../config/firebase');
+        const { collection, getDocs, query, where } = require('firebase/firestore');
+        const attSnap = await getDocs(
+          query(collection(firestoreDb, 'attendance'), where('date', '==', todayIso))
+        );
+
+        const firestoreRecords: RecentAttendanceItem[] = [];
+
+        attSnap.forEach((docSnap: any) => {
+          const d = docSnap.data();
+          const rawId = String(d.employeeId || '').trim();
+          const isGhostId = rawId.toLowerCase().startsWith('emp_');
+
+          if (d && (d.employeeId || d.employeeName) && !isGhostId) {
+            const cleanEmpId = rawId.toLowerCase().replace(/[\/\-_]/g, '');
+            const matchingEmp = emps?.find((e: any) => {
+              const eId = (e.employeeId || e.id || '').toLowerCase().replace(/[\/\-_]/g, '');
+              return eId === cleanEmpId || cleanEmpId.includes(eId) || eId.includes(cleanEmpId);
+            });
+
+            const realRole = (matchingEmp?.role || d.role || (d.designation?.toLowerCase().includes('supervisor') ? 'supervisor' : 'technician')).toLowerCase();
+            const isSupervisor = realRole === 'supervisor' || (matchingEmp?.designation || d.designation || '').toLowerCase().includes('supervisor');
+
+            const realDesignation = matchingEmp?.designation || d.designation || (isSupervisor ? 'Zonal Workforce Supervisor' : 'Field Technician');
+            const realName = matchingEmp?.name || d.employeeName || (isSupervisor ? 'Zonal Supervisor' : 'Field Technician');
+            const formattedEmpId = formatEmployeeId(matchingEmp?.employeeId || d.employeeId);
+
+            const checkInTimeStr = d.checkIn?.timeIST || (d.checkIn?.time ? formatTimeIST(d.checkIn.time) : (d.checkInTime || '--:--'));
+            const checkOutTimeStr = d.checkOut?.timeIST || (d.checkOut?.time ? formatTimeIST(d.checkOut.time) : (d.checkOutTime || '--:--'));
+
+            // ONLY add if check-in time exists and is valid for today
+            if (checkInTimeStr && checkInTimeStr !== '--:--') {
+              const siteNameDisplay = isSupervisor
+                ? 'Supervisor'
+                : (d.siteName && d.siteName !== 'Operations Center' && d.siteName !== 'Zonal Operations Center'
+                    ? d.siteName
+                    : (matchingEmp?.assignedSiteName || 'Substation Site'));
+
+              firestoreRecords.push({
+                id: docSnap.id,
+                employeeId: formattedEmpId,
+                employeeName: realName,
+                designation: realDesignation,
+                siteName: siteNameDisplay,
+                checkInTime: checkInTimeStr,
+                checkOutTime: checkOutTimeStr,
+                duration: d.checkOut ? 'Completed' : 'In Progress',
+                status: d.status || 'present',
+                isInsideGeofence: true,
+                distanceMeters: 0,
+                distanceTraveled: '0.0 km',
+                photoUrl: d.photoUrl || d.checkIn?.photoUrl,
+              });
+            }
+          }
+        });
+
+        setStats((prevStats) => {
+          const apiRecords = data?.recentAttendance || prevStats?.recentAttendance || [];
+          const combinedMap = new Map<string, RecentAttendanceItem>();
+
+          // Keep ONLY valid API records with real check-in time
+          apiRecords.forEach((item) => {
+            if (item.checkInTime && item.checkInTime !== '--:--' && !item.employeeId.toLowerCase().includes('emp_')) {
+              combinedMap.set(item.employeeId.toLowerCase(), {
+                ...item,
+                employeeId: formatEmployeeId(item.employeeId),
+              });
+            }
+          });
+
+          // Override/merge with Firestore live records for today
+          firestoreRecords.forEach((item) => {
+            combinedMap.set(item.employeeId.toLowerCase(), item);
+          });
+
+          return {
+            ...(data || prevStats || ({} as any)),
+            recentAttendance: Array.from(combinedMap.values()),
+          };
+        });
+
+        // Fetch all attendance logs across all dates for weekly analytics chart
+        try {
+          const allSnap = await getDocs(collection(firestoreDb, 'attendance'));
+          const allHist: any[] = [];
+          allSnap.forEach((dSnap: any) => {
+            const hData = dSnap.data();
+            if (hData && (hData.checkIn || hData.checkInTime) && !String(hData.employeeId || '').toLowerCase().startsWith('emp_')) {
+              allHist.push(hData);
+            }
+          });
+          setAllHistoricalLogs(allHist);
+        } catch (_) {}
+      } catch (fsErr) {
+        console.warn('Firestore attendance fetch notice:', fsErr);
+        if (data) setStats(data);
+      }
     } catch (e) {
       console.warn('Dashboard stats error:', e);
     } finally {
@@ -216,24 +387,53 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
   }, [stats?.kpi, employeesList]);
 
   const recentAttendance = useMemo((): RecentAttendanceItem[] => {
-    if (stats?.recentAttendance && stats.recentAttendance.length > 0) {
-      return stats.recentAttendance;
-    }
-    return employeesList.map((emp) => ({
-      id: emp.id || emp.employeeId,
-      employeeId: emp.employeeId || 'EMP',
-      employeeName: emp.name || 'Technician',
-      designation: emp.designation || (emp.role === 'supervisor' ? 'Zonal Workforce Supervisor' : 'Field Technician'),
-      siteName: emp.circle ? `${emp.circle} Circle` : emp.division ? `${emp.division} Division` : 'Central Operations',
-      checkInTime: '--:--',
-      checkOutTime: '--:--',
-      duration: '--',
-      status: (emp.status || '').toLowerCase() === 'inactive' ? 'absent' : (emp.shiftStatus && emp.shiftStatus.toLowerCase() !== 'present' ? emp.shiftStatus.toLowerCase() : 'absent'),
-      isInsideGeofence: true,
-      distanceMeters: 10,
-      distanceTraveled: '0.0 km',
-    }));
-  }, [stats?.recentAttendance, employeesList]);
+    const rawList: RecentAttendanceItem[] = stats?.recentAttendance || [];
+
+    // Keep ONLY real checked-in/out data for today (checkInTime exists and is not '--:--')
+    const realLogs = rawList.filter(
+      (item) =>
+        item.checkInTime &&
+        item.checkInTime !== '--:--' &&
+        !hiddenRecentIds.includes(item.id) &&
+        !item.employeeId.toLowerCase().includes('emp_')
+    );
+
+    // Deduplicate by employee identity so each person has a single live record
+    const dedupedMap = new Map<string, RecentAttendanceItem>();
+    realLogs.forEach((item) => {
+      const cleanEmpKey = (item.employeeId || item.id || '').toLowerCase().trim();
+      if (!cleanEmpKey) return;
+
+      const matchingEmp = employeesList.find((e: any) => {
+        const eId = (e.employeeId || e.id || '').toLowerCase().trim();
+        return eId === cleanEmpKey || cleanEmpKey.includes(eId) || eId.includes(cleanEmpKey);
+      });
+
+      const isSupervisor =
+        matchingEmp?.role === 'supervisor' ||
+        Boolean(item.designation?.toLowerCase().includes('supervisor')) ||
+        (item as any).role === 'supervisor' ||
+        item.siteName === 'Supervisor';
+
+      const techSite =
+        item.siteName && item.siteName !== 'Operations Center' && item.siteName !== 'Zonal Operations Center' && item.siteName !== 'Supervisor'
+          ? item.siteName
+          : (matchingEmp?.assignedSiteName || 'Substation Site');
+
+      const formattedEmpId = formatEmployeeId(matchingEmp?.employeeId || item.employeeId || item.id);
+
+      const updatedItem = {
+        ...item,
+        employeeId: formattedEmpId,
+        employeeName: matchingEmp?.name || item.employeeName,
+        displaySiteName: isSupervisor ? 'Supervisor' : techSite,
+      };
+
+      dedupedMap.set(cleanEmpKey, updatedItem);
+    });
+
+    return Array.from(dedupedMap.values());
+  }, [stats?.recentAttendance, employeesList, hiddenRecentIds]);
 
   const filteredAttendance = recentAttendance.filter((rec) => {
     if (attendanceFilter === 'present') return rec.status === 'present' || rec.status === 'completed';
@@ -243,6 +443,38 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
     if (attendanceFilter === 'outside') return !rec.isInsideGeofence;
     return true;
   });
+
+  const groupedAttendance = useMemo(() => {
+    const groups: { [key: string]: RecentAttendanceItem[] } = {};
+
+    filteredAttendance.forEach((rec) => {
+      let dateLabel = (rec as any).dateHeader || (rec as any).formattedDate || (rec as any).date;
+      if (!dateLabel) {
+        const timeStr = rec.checkInTime || '';
+        if (timeStr.includes(',')) {
+          dateLabel = timeStr.split(',')[0].trim();
+        } else {
+          const now = new Date();
+          const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+          const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+          const dayName = days[now.getDay()];
+          const dayNum = String(now.getDate()).padStart(2, '0');
+          const monthName = months[now.getMonth()];
+          const yearNum = now.getFullYear();
+          dateLabel = `${dayName}, ${dayNum} ${monthName} ${yearNum}`;
+        }
+      }
+      if (!groups[dateLabel]) {
+        groups[dateLabel] = [];
+      }
+      groups[dateLabel].push(rec);
+    });
+
+    return Object.keys(groups).map((headerKey) => ({
+      dateHeader: headerKey,
+      records: groups[headerKey],
+    }));
+  }, [filteredAttendance]);
 
   const distribution = stats?.statusDistribution || {
     presentOnTime: 0,
@@ -261,54 +493,55 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
     return true;
   });
 
-  // Dynamic LIVE Weekly Attendance & Punctuality Analytics
+  // Dynamic LIVE Weekly Attendance & Punctuality Analytics (aggregates all 7 days of the week)
   const computedWeeklyTrend = useMemo(() => {
     const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const now = new Date();
     const list = [];
     const totalEmployees = Math.max(1, employeesList.length);
 
-    for (let i = 5; i >= 0; i--) {
+    // Aggregate both recentAttendance and allHistoricalLogs
+    const combinedSource = [...recentAttendance, ...allHistoricalLogs];
+
+    for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(now.getDate() - i);
+      const dateIso = d.toISOString().split('T')[0];
       const dayLabel = dayNames[(d.getDay() + 6) % 7];
 
-      if (i === 0) {
-        let onTimeCount = 0;
-        let lateCount = 0;
+      const presentEmpIds = new Set<string>();
+      let lateCount = 0;
 
-        recentAttendance.forEach((rec) => {
-          const st = (rec.status || '').toLowerCase();
-          if (st === 'present' || st === 'completed' || st === 'on-time' || st === 'on_time') {
-            onTimeCount++;
-          } else if (st === 'late' || st === 'half_day' || st === 'half-day') {
-            lateCount++;
+      combinedSource.forEach((rec: any) => {
+        const recDate = rec.date || (rec.checkIn?.time ? rec.checkIn.time.split('T')[0] : '');
+        const isMatchDate = recDate === dateIso || (i === 0 && rec.checkInTime && rec.checkInTime !== '--:--');
+
+        if (isMatchDate) {
+          const cleanId = (rec.employeeId || rec.id || '').toLowerCase().trim();
+          if (cleanId && !cleanId.startsWith('emp_')) {
+            presentEmpIds.add(cleanId);
+            const st = (rec.status || '').toLowerCase();
+            if (st === 'late' || st === 'half_day' || st === 'half-day') {
+              lateCount++;
+            }
           }
-        });
+        }
+      });
 
-        const calculatedAbsent = Math.max(0, totalEmployees - (onTimeCount + lateCount));
-        const totalPresent = onTimeCount + lateCount;
-        const rate = Math.round((totalPresent / totalEmployees) * 100);
+      const totalPresent = presentEmpIds.size;
+      const calculatedAbsent = Math.max(0, totalEmployees - totalPresent);
+      const rate = Math.round((totalPresent / totalEmployees) * 100);
 
-        list.push({
-          day: dayLabel,
-          present: totalPresent,
-          late: lateCount,
-          absent: calculatedAbsent,
-          attendanceRate: rate,
-        });
-      } else {
-        list.push({
-          day: dayLabel,
-          present: 0,
-          late: 0,
-          absent: totalEmployees,
-          attendanceRate: 0,
-        });
-      }
+      list.push({
+        day: dayLabel,
+        present: totalPresent,
+        late: lateCount,
+        absent: calculatedAbsent,
+        attendanceRate: rate,
+      });
     }
     return list;
-  }, [recentAttendance, employeesList]);
+  }, [recentAttendance, allHistoricalLogs, employeesList]);
 
   // Status Distribution Pie metrics: Present, Pending, Checked Out
   const presentCount = kpi.currentlyPresent || 0;
@@ -709,14 +942,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
             </Text>
           </TouchableOpacity>
           <TouchableOpacity delayPressIn={0}
-            style={[styles.attFilterPill, attendanceFilter === 'late' && styles.attFilterPillActiveAmber]}
-            onPress={() => setAttendanceFilter('late')}
-          >
-            <Text style={[styles.attFilterText, attendanceFilter === 'late' && styles.attFilterTextActiveAmber]}>
-              Late Flagged ⚠️
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity delayPressIn={0}
             style={[styles.attFilterPill, attendanceFilter === 'half_day' && styles.attFilterPillActivePurple]}
             onPress={() => setAttendanceFilter('half_day')}
           >
@@ -756,122 +981,159 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
                 <Text style={[styles.tableHeaderCell, { width: 140 }]}>DISTANCE TRAVELED</Text>
                 <Text style={[styles.tableHeaderCell, { width: 130 }]}>SHIFT STATUS</Text>
                 <Text style={[styles.tableHeaderCell, { width: 130 }]}>ROUTE MAP</Text>
+                <Text style={[styles.tableHeaderCell, { width: 130 }]}>ACTIONS</Text>
               </View>
 
-              {/* Table Rows */}
-              {filteredAttendance.length === 0 ? (
+              {/* Table Rows (Separated Date & Day Wise) */}
+              {groupedAttendance.length === 0 ? (
                 <View style={styles.emptyTableRow}>
                   <Text style={styles.emptyTableText}>No attendance records matching filter.</Text>
                 </View>
               ) : (
-                filteredAttendance.map((rec, index) => {
-                  const isLate = rec.status === 'late';
-                  const isCompleted = rec.status === 'completed';
-                  const isAbsent = rec.status === 'absent';
-                  const isHalfDay = rec.status === 'half_day' || rec.status === 'half-day';
-                  const isLeave = rec.status === 'leave';
+                groupedAttendance.map((group, groupIdx) => (
+                  <View key={`date_group_${groupIdx}_${group.dateHeader}`}>
+                    {/* Date & Day Banner Separator */}
+                    <View style={styles.dateGroupBanner}>
+                      <Calendar size={14} color="#1E63F0" style={{ marginRight: 6 }} />
+                      <Text style={styles.dateGroupBannerText}>
+                        {group.dateHeader}
+                      </Text>
+                      <View style={styles.dateGroupBadge}>
+                        <Text style={styles.dateGroupBadgeText}>
+                          {group.records.length} {group.records.length === 1 ? 'Record' : 'Records'}
+                        </Text>
+                      </View>
 
-                  return (
-                    <View
-                      key={rec.id}
-                      style={[
-                        styles.tableDataRow,
-                        index % 2 === 1 && styles.tableDataRowAlt,
-                      ]}
-                    >
-                      {/* 1. EMPLOYEE (Avatar Photo + Name) */}
+                      <View style={{ flex: 1 }} />
+
                       <TouchableOpacity delayPressIn={0}
-                        style={[styles.tableDataCell, { width: 175, flexDirection: 'row', alignItems: 'center', gap: 8 }]}
-                        onPress={() => setSelectedRecord(rec)}
-                        activeOpacity={0.7}
+                        style={styles.deleteDayBannerBtn}
+                        onPress={() => handleDeleteDay(group)}
+                        activeOpacity={0.75}
                       >
-                        {rec.photoUrl ? (
-                          <Image
-                            source={{ uri: resolvePhotoUrl(rec.photoUrl) }}
-                            style={{ width: 32, height: 32, borderRadius: 16, borderWidth: 1.5, borderColor: '#38BDF8' }}
-                          />
-                        ) : (
-                          <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#E2E8F0', justifyContent: 'center', alignItems: 'center' }}>
-                            <Camera size={14} color="#64748B" />
-                          </View>
-                        )}
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.employeeNameText} numberOfLines={1}>{rec.employeeName}</Text>
-                          <Text style={styles.employeeCodeText}>{rec.employeeId}</Text>
-                        </View>
+                        <Trash2 size={13} color="#DC2626" style={{ marginRight: 4 }} />
+                        <Text style={styles.deleteDayBannerBtnText}>Delete Day's Data</Text>
                       </TouchableOpacity>
-
-                      {/* 2. SUBSTATION SITE */}
-                      <View style={[styles.tableDataCell, { width: 190 }]}>
-                        <Text style={styles.substationSiteText}>{rec.siteName}</Text>
-                      </View>
-
-                      {/* 3. CHECK-IN TIME */}
-                      <View style={[styles.tableDataCell, { width: 130 }]}>
-                        <Text style={styles.timeBoldText}>{rec.checkInTime}</Text>
-                      </View>
-
-                      {/* 4. CHECK-OUT TIME */}
-                      <View style={[styles.tableDataCell, { width: 130 }]}>
-                        <Text style={styles.timeBoldText}>{rec.checkOutTime}</Text>
-                      </View>
-
-                      {/* 5. WORKING DURATION (Electric Blue) */}
-                      <View style={[styles.tableDataCell, { width: 150 }]}>
-                        <Text style={styles.durationBlueText}>{rec.duration}</Text>
-                      </View>
-
-                      {/* 6. DISTANCE TRAVELED */}
-                      <View style={[styles.tableDataCell, { width: 140 }]}>
-                        <Text style={styles.distanceText}>{rec.distanceTraveled || '--'}</Text>
-                      </View>
-
-                      {/* 7. SHIFT STATUS (Photo 2 Pill) */}
-                      <View style={[styles.tableDataCell, { width: 130 }]}>
-                        {isLate ? (
-                          <View style={styles.statusPillLate}>
-                            <AlertCircle size={13} color="#D97706" />
-                            <Text style={styles.statusPillLateText}>Late</Text>
-                          </View>
-                        ) : isHalfDay ? (
-                          <View style={styles.statusPillHalfDay}>
-                            <Clock size={13} color="#7C3AED" />
-                            <Text style={styles.statusPillHalfDayText}>Half-Day</Text>
-                          </View>
-                        ) : isLeave ? (
-                          <View style={styles.statusPillLeave}>
-                            <Calendar size={13} color="#0284C7" />
-                            <Text style={styles.statusPillLeaveText}>Leave</Text>
-                          </View>
-                        ) : isAbsent ? (
-                          <View style={styles.statusPillAbsent}>
-                            <UserX size={13} color="#DC2626" />
-                            <Text style={styles.statusPillAbsentText}>Absent</Text>
-                          </View>
-                        ) : (
-                          <View style={styles.statusPillOnTime}>
-                            <CheckCircle2 size={13} color="#059669" />
-                            <Text style={styles.statusPillOnTimeText}>
-                              {isCompleted ? 'Completed' : 'On-Time'}
-                            </Text>
-                          </View>
-                        )}
-                      </View>
-
-                      {/* 8. ROUTE MAP: [ ✈ View Map ] Button */}
-                      <View style={[styles.tableDataCell, { width: 130 }]}>
-                        <TouchableOpacity delayPressIn={0}
-                          style={styles.viewMapBtn}
-                          onPress={() => setMapModalRecord(rec)}
-                          activeOpacity={0.75}
-                        >
-                          <Navigation size={13} color="#1E63F0" />
-                          <Text style={styles.viewMapBtnText}>View Map</Text>
-                        </TouchableOpacity>
-                      </View>
                     </View>
-                  );
-                })
+
+                    {/* Group Records */}
+                    {group.records.map((rec, index) => {
+                      const isLate = rec.status === 'late';
+                      const isCompleted = rec.status === 'completed';
+                      const isAbsent = rec.status === 'absent';
+                      const isHalfDay = rec.status === 'half_day' || rec.status === 'half-day';
+                      const isLeave = rec.status === 'leave';
+
+                      return (
+                        <View
+                          key={rec.id}
+                          style={[
+                            styles.tableDataRow,
+                            index % 2 === 1 && styles.tableDataRowAlt,
+                          ]}
+                        >
+                          {/* 1. EMPLOYEE (Avatar Photo + Name) */}
+                          <TouchableOpacity delayPressIn={0}
+                            style={[styles.tableDataCell, { width: 175, flexDirection: 'row', alignItems: 'center', gap: 8 }]}
+                            onPress={() => setSelectedRecord(rec)}
+                            activeOpacity={0.7}
+                          >
+                            {rec.photoUrl ? (
+                              <Image
+                                source={{ uri: resolvePhotoUrl(rec.photoUrl) }}
+                                style={{ width: 32, height: 32, borderRadius: 16, borderWidth: 1.5, borderColor: '#38BDF8' }}
+                              />
+                            ) : (
+                              <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#E2E8F0', justifyContent: 'center', alignItems: 'center' }}>
+                                <Camera size={14} color="#64748B" />
+                              </View>
+                            )}
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.employeeNameText} numberOfLines={1}>{rec.employeeName}</Text>
+                              <Text style={styles.employeeCodeText}>{rec.employeeId}</Text>
+                            </View>
+                          </TouchableOpacity>
+
+                          {/* 2. SUBSTATION SITE */}
+                          <View style={[styles.tableDataCell, { width: 190 }]}>
+                            <Text style={styles.substationSiteText}>{(rec as any).displaySiteName || rec.siteName}</Text>
+                          </View>
+
+                          {/* 3. CHECK-IN TIME */}
+                          <View style={[styles.tableDataCell, { width: 130 }]}>
+                            <Text style={styles.timeBoldText}>{rec.checkInTime}</Text>
+                          </View>
+
+                          {/* 4. CHECK-OUT TIME */}
+                          <View style={[styles.tableDataCell, { width: 130 }]}>
+                            <Text style={styles.timeBoldText}>{rec.checkOutTime}</Text>
+                          </View>
+
+                          {/* 5. WORKING DURATION (Electric Blue) */}
+                          <View style={[styles.tableDataCell, { width: 150 }]}>
+                            <Text style={styles.durationBlueText}>{rec.duration}</Text>
+                          </View>
+
+                          {/* 6. DISTANCE TRAVELED */}
+                          <View style={[styles.tableDataCell, { width: 140 }]}>
+                            <Text style={styles.distanceText}>{rec.distanceTraveled || '--'}</Text>
+                          </View>
+
+                          {/* 7. SHIFT STATUS (Photo 2 Pill) */}
+                          <View style={[styles.tableDataCell, { width: 130 }]}>
+                            {isHalfDay ? (
+                              <View style={styles.statusPillHalfDay}>
+                                <Clock size={13} color="#7C3AED" />
+                                <Text style={styles.statusPillHalfDayText}>Half-Day</Text>
+                              </View>
+                            ) : isLeave ? (
+                              <View style={styles.statusPillLeave}>
+                                <Calendar size={13} color="#0284C7" />
+                                <Text style={styles.statusPillLeaveText}>Leave</Text>
+                              </View>
+                            ) : isAbsent ? (
+                              <View style={styles.statusPillAbsent}>
+                                <UserX size={13} color="#DC2626" />
+                                <Text style={styles.statusPillAbsentText}>Absent</Text>
+                              </View>
+                            ) : (
+                              <View style={styles.statusPillOnTime}>
+                                <CheckCircle2 size={13} color="#059669" />
+                                <Text style={styles.statusPillOnTimeText}>
+                                  {isCompleted ? 'Completed' : 'On-Time'}
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+
+                          {/* 8. ROUTE MAP: [ ✈ View Map ] Button */}
+                          <View style={[styles.tableDataCell, { width: 130 }]}>
+                            <TouchableOpacity delayPressIn={0}
+                              style={styles.viewMapBtn}
+                              onPress={() => setMapModalRecord(rec)}
+                              activeOpacity={0.75}
+                            >
+                              <Navigation size={13} color="#1E63F0" />
+                              <Text style={styles.viewMapBtnText}>View Map</Text>
+                            </TouchableOpacity>
+                          </View>
+
+                          {/* 9. ACTIONS: [ 🗑 Delete Log ] Button */}
+                          <View style={[styles.tableDataCell, { width: 130 }]}>
+                            <TouchableOpacity delayPressIn={0}
+                              style={styles.deleteRowBtn}
+                              onPress={() => handleDeleteRecord(rec)}
+                              activeOpacity={0.75}
+                            >
+                              <Trash2 size={13} color="#DC2626" style={{ marginRight: 4 }} />
+                              <Text style={styles.deleteRowBtnText}>Delete Log</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                ))
               )}
             </View>
           </ScrollView>
@@ -896,8 +1158,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({ navi
             {selectedRecord ? (
               <ScrollView showsVerticalScrollIndicator={false}>
                 <View style={styles.modalUserRow}>
-                  <Image source={{ uri: selectedRecord.avatar }} style={styles.modalAvatar} />
-                  <View style={{ flex: 1, marginLeft: 12 }}>
+                  <View style={{ flex: 1 }}>
                     <Text style={styles.modalTechName}>{selectedRecord.employeeName}</Text>
                     <Text style={styles.modalEmpId}>ID: {selectedRecord.employeeId}</Text>
                     <Text style={styles.modalDesig}>{selectedRecord.designation}</Text>
@@ -2203,6 +2464,199 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontStyle: 'italic',
     lineHeight: 16,
+  },
+
+  // Date & Day Separator Banner
+  dateGroupBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  dateGroupBannerText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#1E40AF',
+    letterSpacing: 0.3,
+  },
+  dateGroupBadge: {
+    marginLeft: 10,
+    backgroundColor: '#DBEAFE',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  dateGroupBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1E63F0',
+  },
+
+  // Date Banner & Row Delete Action Styling
+  deleteDayBannerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF2F2',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  deleteDayBannerBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#DC2626',
+  },
+  deleteRowBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FEF2F2',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  deleteRowBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#DC2626',
+  },
+
+  // Double Verification Delete Modal Styles
+  deleteVerificationModalCard: {
+    width: '92%',
+    maxWidth: 500,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 20,
+  },
+  deleteModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 14,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCloseBtn: {
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
+  },
+  deleteModalHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  warningIconCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#FEF2F2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  deleteModalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  deleteModalSub: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#DC2626',
+    marginTop: 2,
+  },
+  deleteModalBody: {
+    marginVertical: 4,
+  },
+  warningAlertBox: {
+    flexDirection: 'row',
+    backgroundColor: '#FEF2F2',
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  warningAlertTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#991B1B',
+    marginBottom: 4,
+  },
+  warningAlertText: {
+    fontSize: 12,
+    color: '#7F1D1D',
+    lineHeight: 17,
+  },
+  verificationPromptLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 6,
+  },
+  verificationTextInput: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+    letterSpacing: 1,
+  },
+  deleteModalFooter: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 18,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  cancelBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
+  },
+  cancelBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  confirmDeleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#DC2626',
+  },
+  confirmDeleteBtnDisabled: {
+    backgroundColor: '#94A3B8',
+    opacity: 0.6,
+  },
+  confirmDeleteBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 
   // Photo 2: Recent Attendance Section Header
